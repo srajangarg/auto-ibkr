@@ -1,32 +1,59 @@
 #!/bin/bash
 
+# Exit on error
+set -e
+
 # Load environment variables from .env if it exists
 if [ -f .env ]; then
+    # Use a more robust way to load .env
     export $(grep -v '^#' .env | xargs)
 fi
 
-# Define Ports (must match python script logic)
-# 4002 = Paper, 4001 = Live
-if [ "$TRADING_MODE" = "live" ]; then
-    TARGET_PORT=4001
-else
-    TARGET_PORT=4002
+# Check for required variables
+if [ -z "$TWS_USERID" ] || [ -z "$TWS_PASSWORD" ]; then
+    echo "[Error] TWS_USERID and TWS_PASSWORD must be set in .env"
+    exit 1
 fi
 
-echo "[Shell] Starting IB Gateway (Mode: ${TRADING_MODE:-paper})... Check your phone for 2FA Notification!"
-docker-compose up -d
+TRADING_MODE=${TRADING_MODE:-paper}
 
-# Wait loop: Gives you 120 seconds to approve login on phone
-echo "[Shell] Waiting for IB Gateway to authenticate (Check your phone)..."
+echo "[Shell] Starting IB Gateway (Mode: $TRADING_MODE)..."
+docker compose up -d
+
+# Cleanup function to ensure Docker is stopped
+cleanup() {
+    echo "[Shell] Cleaning up..."
+    docker compose stop # Use stop instead of down to preserve volumes/containers for faster restart
+}
+trap cleanup EXIT
+
+echo "[Shell] Waiting for IB Gateway to be healthy (this includes 2FA if needed)..."
+# Wait for the container to be healthy according to our healthcheck
+# This just means the API port is open. Actual login might take longer.
+while true; do
+    HEALTH=$(docker inspect --format='{{.State.Health.Status}}' ib-gateway 2>/dev/null || echo "not-running")
+    if [ "$HEALTH" == "healthy" ]; then
+        break
+    fi
+    if [ "$HEALTH" == "unhealthy" ]; then
+        echo "[Shell] Gateway became unhealthy. Check logs."
+        docker compose logs --tail 20 ib-gateway
+        exit 1
+    fi
+    echo -n "."
+    sleep 2
+done
+echo -e "\n[Shell] Gateway port is open."
+
+# Now wait for the actual login message in the logs
+echo "[Shell] Waiting for login confirmation..."
 READY=0
 for i in {1..60}; do
-    # Check logs for successful login message (matches IBC output)
     if docker logs ib-gateway 2>&1 | grep -qE "Login succeeded|Login has completed"; then
-        echo -e "\n[Shell] Login successful! Gateway is ready."
+        echo "[Shell] Login successful! Gateway is ready."
         READY=1
         break
     fi
-    # Also check if it's still waiting for 2FA to keep the user informed
     if docker logs ib-gateway 2>&1 | grep -q "Second Factor Authentication initiated"; then
         echo -n "2FA..."
     else
@@ -36,8 +63,7 @@ for i in {1..60}; do
 done
 
 if [ $READY -eq 0 ]; then
-    echo -e "\n[Shell] Error: Gateway failed to start or 2FA was not approved in time."
-    docker-compose down
+    echo -e "\n[Shell] Error: Gateway failed to authenticate in time."
     exit 1
 fi
 
@@ -50,7 +76,4 @@ else
     /home/garg/.local/bin/uv run check_positions.py
 fi
 
-# Cleanup
-echo "[Shell] Strategy complete. Stopping Gateway..."
-docker-compose down
-
+echo "[Shell] Strategy complete."

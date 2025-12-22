@@ -2,11 +2,10 @@ services:
   ib-gateway:
     image: gnzsnz/ib-gateway:stable
     container_name: ib-gateway
-    restart: no
+    restart: "no"
     env_file:
       - .env
     environment:
-      # defined in .env: TWS_USERID, TWS_PASSWORD, TRADING_MODE
       - TWS_SETTINGS_PATH=/home/ibgateway/Jts
       - TWS_ACCEPT_INCOMING=accept
       - READ_ONLY_API=no
@@ -15,4 +14,10 @@ services:
       - "4001:4003" # Map host 4001 to container's socat port 4003
       - "4002:4003" # Map host 4002 to container's socat port 4003
       - "5900:5900" # VNC (Optional Debugging)
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'timeout 1 bash -c \"cat < /dev/null > /dev/tcp/localhost/4003\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
