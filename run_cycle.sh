@@ -37,7 +37,12 @@ fi
 
 # Run the strategy
 echo "[Shell] Running Python Strategy..."
-python3 check_positions.py
+if command -v uv &> /dev/null; then
+    uv run check_positions.py
+else
+    # Fallback to absolute path if not in PATH
+    /home/garg/.local/bin/uv run check_positions.py
+fi
 
 # Cleanup
 echo "[Shell] Strategy complete. Stopping Gateway..."

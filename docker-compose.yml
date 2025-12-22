@@ -1,7 +1,6 @@
-version: '3.8'
 services:
   ib-gateway:
-    image: gnzsnz/ib-gateway-docker:stable
+    image: gnzsnz/ib-gateway:stable
     container_name: ib-gateway
     restart: no
     env_file:
