@@ -30,12 +30,10 @@ async def main():
 
         # Get Account Summary (Cash/NAV)
         print("\n[Python] Account Summary:")
-        # We need to wait for account summary tags to be filled
-        account_summary = ib.accountSummary()
+        # Use the async version to avoid event loop conflicts
+        account_summary = await ib.accountSummaryAsync()
+        
         if not account_summary:
-             # If summary is empty immediately, we might need to wait or request it specifically
-             # accountSummary() is a list of AccountValue objects that gets updated.
-             # For a one-off script, we can just print what's there.
              print(" - No account summary data available yet.")
         else:
             for item in account_summary:

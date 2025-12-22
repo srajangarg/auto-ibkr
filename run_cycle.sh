@@ -16,16 +16,22 @@ fi
 echo "[Shell] Starting IB Gateway (Mode: ${TRADING_MODE:-paper})... Check your phone for 2FA Notification!"
 docker-compose up -d
 
-# Wait loop: Gives you 60 seconds to approve login on phone
-echo "[Shell] Waiting for API port $TARGET_PORT to open..."
+# Wait loop: Gives you 120 seconds to approve login on phone
+echo "[Shell] Waiting for IB Gateway to authenticate (Check your phone)..."
 READY=0
-for i in {1..30}; do
-    if nc -z 127.0.0.1 $TARGET_PORT; then
-        echo -e "\n[Shell] Gateway is ready!"
+for i in {1..60}; do
+    # Check logs for successful login message (matches IBC output)
+    if docker logs ib-gateway 2>&1 | grep -qE "Login succeeded|Login has completed"; then
+        echo -e "\n[Shell] Login successful! Gateway is ready."
         READY=1
         break
     fi
-    echo -n "."
+    # Also check if it's still waiting for 2FA to keep the user informed
+    if docker logs ib-gateway 2>&1 | grep -q "Second Factor Authentication initiated"; then
+        echo -n "2FA..."
+    else
+        echo -n "."
+    fi
     sleep 2
 done
 
