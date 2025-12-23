@@ -1,6 +1,22 @@
 import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
+import os
+import sys
+
+# Add the current directory to sys.path to allow importing constants
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from constants import (
+    TRADING_DAYS_PER_YEAR,
+    DAYS_PER_YEAR,
+    COMBINED_FILE,
+    DATE_COL,
+    TOTAL_VALUE_COL,
+    STRATEGY_RETURN_COL,
+    T_BILL_3M_COL,
+    RATE_COLS,
+    SGOV_TICKER
+)
 
 class BasePortfolio(ABC):
     def __init__(self):
@@ -21,11 +37,13 @@ class BasePortfolio(ABC):
         pass
 
 class StaticPortfolio(BasePortfolio):
+    WEIGHT_TOLERANCE = 1e-6
+
     def __init__(self, target_weights):
         super().__init__()
         # Validate weights
         total_weight = sum(target_weights.values())
-        if abs(total_weight - 100) > 1e-6:
+        if abs(total_weight - 100) > self.WEIGHT_TOLERANCE:
             raise ValueError(f"Weights must add up to 100%, got {total_weight}")
         self.target_weights = {k: v / 100.0 for k, v in target_weights.items()}
 
@@ -34,6 +52,12 @@ class StaticPortfolio(BasePortfolio):
         self.positions = {asset: current_total * weight for asset, weight in self.target_weights.items()}
 
 class DynamicLeveragedPortfolio(BasePortfolio):
+    LEVERAGE_MIN = 0.5
+    LEVERAGE_MAX = 2.0
+    LEVERAGE_THRESHOLD = 1.0
+    TICKER_X3_MULTIPLIER = 3.0
+    SGOV_TICKER = 'SGOV'
+
     def __init__(self, ticker, alpha, beta, target_return, vol_period):
         """
         Dynamic leverage based on volatility and excess return.
@@ -41,7 +65,7 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         """
         super().__init__()
         self.ticker = ticker
-        self.ticker3 = f"{ticker}x3"
+        self.ticker3 = f"{ticker}x{int(self.TICKER_X3_MULTIPLIER)}"
         self.alpha = alpha
         self.beta = beta
         self.target_return = target_return
@@ -53,8 +77,8 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         if row is None:
             return
 
-        # 3M T-Bill rate as proxy for risk-free rate (RF)
-        rf = row['3M'] / 100.0
+        # T-Bill rate as proxy for risk-free rate (RF)
+        rf = row[T_BILL_3M_COL] / 100.0
         vol_col = f"{self.ticker}_rvol_{self.vol_period}"
         vol = row.get(vol_col, 0)
         
@@ -63,55 +87,58 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         else:
             leverage = self.alpha
             
-        # Cut off between 0.5 and 2.0
-        leverage = max(0.5, min(2.0, leverage))
+        # Cut off between LEVERAGE_MIN and LEVERAGE_MAX
+        leverage = max(self.LEVERAGE_MIN, min(self.LEVERAGE_MAX, leverage))
         
         # Calculate weights for TICKER, TICKERx3, and SGOV
-        if leverage < 1.0:
-            # Only have SGOV if desired_leverage < 1
+        if leverage < self.LEVERAGE_THRESHOLD:
+            # Only have SGOV if desired_leverage < LEVERAGE_THRESHOLD
             w_ticker = leverage
-            w_sgov = 1.0 - leverage
+            w_sgov = self.LEVERAGE_THRESHOLD - leverage
             w_ticker3 = 0.0
         else:
-            # For leverage >= 1, mix TICKER and TICKERx3
+            # For leverage >= LEVERAGE_THRESHOLD, mix TICKER and TICKERx3
             # w_T + w_T3 = 1
-            # w_T + 3 * w_T3 = leverage
-            # => 2 * w_T3 = leverage - 1
-            w_ticker3 = (leverage - 1.0) / 2.0
-            w_ticker = 1.0 - w_ticker3
+            # w_T + TICKER_X3_MULTIPLIER * w_T3 = leverage
+            # => (TICKER_X3_MULTIPLIER - 1) * w_T3 = leverage - 1
+            w_ticker3 = (leverage - self.LEVERAGE_THRESHOLD) / (self.TICKER_X3_MULTIPLIER - 1.0)
+            w_ticker = self.LEVERAGE_THRESHOLD - w_ticker3
             w_sgov = 0.0
             
         self.positions = {
             self.ticker: current_total * w_ticker,
             self.ticker3: current_total * w_ticker3,
-            'SGOV': current_total * w_sgov
+            self.SGOV_TICKER: current_total * w_sgov
         }
 
 class Backtester:
-    def __init__(self, csv_path, initial_amt, monthly_cf=0, start_date='2005-01-01', end_date=None):
+    DEFAULT_INITIAL_AMT = 10000
+    DEFAULT_START_DATE = '2005-01-01'
+
+    def __init__(self, csv_path, initial_amt, monthly_cf=0, start_date=DEFAULT_START_DATE, end_date=None):
         self.initial_amt = initial_amt  
         self.monthly_cf = monthly_cf
         
         self.df = pd.read_csv(csv_path)
-        self.df['Date'] = pd.to_datetime(self.df['Date'])
-        self.df.sort_values('Date', inplace=True)
+        self.df[DATE_COL] = pd.to_datetime(self.df[DATE_COL])
+        self.df.sort_values(DATE_COL, inplace=True)
         
         if start_date:
-            self.df = self.df[self.df['Date'] >= pd.to_datetime(start_date)]
+            self.df = self.df[self.df[DATE_COL] >= pd.to_datetime(start_date)]
         if end_date:
-            self.df = self.df[self.df['Date'] <= pd.to_datetime(end_date)]
+            self.df = self.df[self.df[DATE_COL] <= pd.to_datetime(end_date)]
             
         if self.df.empty:
             raise ValueError(f"No data found for the given date range: {start_date} to {end_date}")
             
         # Store the actual start and end dates used
-        self.actual_start = self.df['Date'].min()
-        self.actual_end = self.df['Date'].max()
+        self.actual_start = self.df[DATE_COL].min()
+        self.actual_end = self.df[DATE_COL].max()
         
-        self.df.set_index('Date', inplace=True)
+        self.df.set_index(DATE_COL, inplace=True)
         
         # Identify return columns (those not in risk-free rates)
-        self.rate_cols = ['10Y', '2Y', '3M']
+        self.rate_cols = RATE_COLS
         self.return_cols = [c for c in self.df.columns if c not in self.rate_cols]
         
         # Ensure all return columns are numeric
@@ -148,43 +175,43 @@ class Backtester:
             daily_ret = (total_val / val_before - 1) if val_before != 0 else 0
             
             history.append({
-                'Date': date, 
-                'Total Value': total_val, 
-                'Strategy Return': daily_ret,
-                'RF': row['3M'] / 100.0 / 252 # Daily RF proxy
+                DATE_COL: date, 
+                TOTAL_VALUE_COL: total_val, 
+                STRATEGY_RETURN_COL: daily_ret,
+                SGOV_TICKER: row[SGOV_TICKER] # Daily RF proxy from combined data
             })
             last_month = current_month
             
-        history_df = pd.DataFrame(history).set_index('Date')
+        history_df = pd.DataFrame(history).set_index(DATE_COL)
         return history_df, total_contributions
 
     def calculate_metrics(self, history_df, total_contributions):
         if history_df.empty:
             return {}
             
-        total_value = history_df['Total Value'].iloc[-1]
-        num_years = (history_df.index[-1] - history_df.index[0]).days / 365.25
+        total_value = history_df[TOTAL_VALUE_COL].iloc[-1]
+        num_years = (history_df.index[-1] - history_df.index[0]).days / DAYS_PER_YEAR
         
         # CAGR (Time-Weighted Return)
         # We use the product of strategy returns to find the total growth of $1
-        total_return_factor = (1 + history_df['Strategy Return']).prod()
+        total_return_factor = (1 + history_df[STRATEGY_RETURN_COL]).prod()
         cagr = (total_return_factor ** (1 / num_years) - 1) if num_years > 0 else 0
         
         # Drawdown (based on actual portfolio value)
-        rolling_max = history_df['Total Value'].cummax()
-        drawdown = (history_df['Total Value'] - rolling_max) / rolling_max
+        rolling_max = history_df[TOTAL_VALUE_COL].cummax()
+        drawdown = (history_df[TOTAL_VALUE_COL] - rolling_max) / rolling_max
         max_drawdown = drawdown.min()
         
         # Volatility (Annualized strategy returns)
-        strategy_returns = history_df['Strategy Return']
-        volatility = strategy_returns.std() * np.sqrt(252)
+        strategy_returns = history_df[STRATEGY_RETURN_COL]
+        volatility = strategy_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
         
         # Sharpe Ratio (Annualized)
-        excess_returns = strategy_returns - history_df['RF']
-        sharpe = (excess_returns.mean() / excess_returns.std() * np.sqrt(252)) if excess_returns.std() != 0 else 0
+        excess_returns = strategy_returns - history_df[SGOV_TICKER]
+        sharpe = (excess_returns.mean() / excess_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)) if excess_returns.std() != 0 else 0
         
         return {
-            'Total Value': total_value,
+            TOTAL_VALUE_COL: total_value,
             'Total Contributions': total_contributions,
             'Total Gain': total_value - total_contributions,
             'CAGR': cagr,
@@ -197,16 +224,22 @@ if __name__ == "__main__":
     import sys
     import os
     
-    csv_file = "/home/garg/auto-ibkr/backtest/combined_data.csv"
+    # Use the combined file from constants
+    csv_file = COMBINED_FILE
+    if not os.path.exists(csv_file):
+        # Fallback to absolute path or check if it exists relative to the script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        csv_file = os.path.join(script_dir, "combined_data.csv")
+        
     if not os.path.exists(csv_file):
         print(f"Error: {csv_file} not found.")
         sys.exit(1)
     
     # Simulation Parameters
     params = {
-        'initial_amt': 10000,
+        'initial_amt': Backtester.DEFAULT_INITIAL_AMT,
         # 'monthly_cf': 100,
-        # 'start_date': '2020-06-01',
+        # 'start_date': Backtester.DEFAULT_START_DATE,
     }
     
     # Define Portfolios to Compare
@@ -236,7 +269,7 @@ if __name__ == "__main__":
     
     # Format the rows for better readability
     format_map = {
-        'Total Value': lambda x: f"${x:,.2f}",
+        TOTAL_VALUE_COL: lambda x: f"${x:,.2f}",
         'Total Contributions': lambda x: f"${x:,.2f}",
         'Total Gain': lambda x: f"${x:,.2f}",
         'CAGR': lambda x: f"{x*100:.2f}%",
