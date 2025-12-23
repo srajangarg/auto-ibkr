@@ -1,11 +1,16 @@
+import os
+
+# Get the directory where this file (constants.py) is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Fixed Constants
 TRADING_DAYS_PER_YEAR = 252
 DAYS_PER_YEAR = 365.25 # For CAGR calculation
 
 # File Paths
-RATES_FILE = 'backtest/rates.csv'
-RETURNS_FILE = 'backtest/returns.csv'
-COMBINED_FILE = 'backtest/combined_data.csv'
+RATES_FILE = os.path.join(BASE_DIR, 'rates.csv')
+RETURNS_FILE = os.path.join(BASE_DIR, 'returns.csv')
+DATA_FILE = os.path.join(BASE_DIR, 'combined_data.csv')
 
 # Column Names
 DATE_COL = 'Date'

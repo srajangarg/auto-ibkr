@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -64,9 +65,13 @@ def plot_realized_volatility(csv_path, ticker):
         print(f"  {label}: {last_vol*100:.2f}%")
 
 if __name__ == "__main__":
+    # Add the current directory to sys.path to allow importing constants
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from constants import DATA_FILE
+
     # Default to QQQ if no ticker provided
     target_ticker = sys.argv[1] if len(sys.argv) > 1 else 'QQQ'
-    data_file = "/home/garg/auto-ibkr/backtest/combined_data.csv"
+    data_file = DATA_FILE
     
     plot_realized_volatility(data_file, target_ticker)
 

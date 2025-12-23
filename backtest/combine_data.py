@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import pandas as pd
 import numpy as np
 import os
@@ -9,7 +10,7 @@ from constants import (
     TRADING_DAYS_PER_YEAR,
     RATES_FILE,
     RETURNS_FILE,
-    COMBINED_FILE,
+    DATA_FILE,
     DATE_COL,
     T_BILL_3M_COL,
     T_NOTE_2Y_COL,
@@ -65,9 +66,9 @@ def combine_and_convert():
     combined_df.dropna(inplace=True)
 
     # Save to a new file
-    combined_df.to_csv(COMBINED_FILE)
+    combined_df.to_csv(DATA_FILE)
     
-    print(f"Successfully combined data and saved to {COMBINED_FILE}")
+    print(f"Successfully combined data and saved to {DATA_FILE}")
     print("\nFirst few rows of combined data:")
     print(combined_df.head())
 

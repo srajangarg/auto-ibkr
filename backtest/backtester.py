@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
@@ -9,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from constants import (
     TRADING_DAYS_PER_YEAR,
     DAYS_PER_YEAR,
-    COMBINED_FILE,
+    DATA_FILE,
     DATE_COL,
     TOTAL_VALUE_COL,
     STRATEGY_RETURN_COL,
@@ -225,15 +226,23 @@ if __name__ == "__main__":
     import os
     
     # Use the combined file from constants
-    csv_file = COMBINED_FILE
+    csv_file = DATA_FILE
+    
     if not os.path.exists(csv_file):
-        # Fallback to absolute path or check if it exists relative to the script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        csv_file = os.path.join(script_dir, "combined_data.csv")
-        
-    if not os.path.exists(csv_file):
-        print(f"Error: {csv_file} not found.")
-        sys.exit(1)
+        print(f"Data file {csv_file} not found. Running combine_data.py to generate it...")
+        try:
+            from combine_data import combine_and_convert
+            combine_and_convert()
+            # After running, check again. Note: COMBINED_FILE is what combine_and_convert saves to.
+            if not os.path.exists(csv_file):
+                print(f"Error: {csv_file} still not found after running combine_data.py.")
+                sys.exit(1)
+        except ImportError:
+            print("Error: Could not import combine_and_convert from combine_data.py")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error running combine_data.py: {e}")
+            sys.exit(1)
     
     # Simulation Parameters
     params = {
@@ -256,7 +265,7 @@ if __name__ == "__main__":
     
     # Initialize one backtester just to get actual dates for printing
     temp_bt = Backtester(csv_file, **params)
-    print(f"Running backtests from {temp_bt.actual_start.date()} to {temp_bt.actual_end.date()}")
+    print(f"\nRunning backtests from {temp_bt.actual_start.date()} to {temp_bt.actual_end.date()}")
     
     for name, portfolio in portfolios.items():
         bt = Backtester(csv_file, **params)
@@ -284,4 +293,6 @@ if __name__ == "__main__":
             comparison_df.loc[metric] = comparison_df.loc[metric].apply(formatter)
             
     # Print the table
+    print()
     print(comparison_df)
+    print()
