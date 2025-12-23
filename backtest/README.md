@@ -14,9 +14,9 @@ Before running a backtest, the raw data files need to be combined and processed.
 1. Merges `rates.csv` and `returns.csv`.
 2. Calculates SGOV daily returns from 3M T-Bill rates.
 3. Calculates realized volatility for various windows (1M, 2M, 3M) for use in dynamic leverage strategies.
-4. Generates `combined_data.csv`.
+4. Generates `data/combined_data.csv`.
 
-**Note:** `backtester.py` will automatically run `combine_data.py` if `combined_data.csv` is missing.
+**Note:** `backtester.py` will automatically run `combine_data.py` if `data/combined_data.csv` is missing.
 
 ## Core Components
 

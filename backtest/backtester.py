@@ -116,7 +116,7 @@ class DynamicLeveragedPortfolio(BasePortfolio):
     LEVERAGE_THRESHOLD = 1.0
     TICKER_X3_MULTIPLIER = 3.0
 
-    def __init__(self, ticker, alpha, beta, target_return, vol_period):
+    def __init__(self, ticker, alpha, beta, target_return, vol_period, min_leverage=LEVERAGE_MIN, max_leverage=LEVERAGE_MAX):
         """
         Dynamic leverage based on volatility and excess return.
         desired_leverage = alpha + beta * (target_return - RF) / (vol**2)
@@ -129,25 +129,20 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         self.target_return = target_return
         self.vol_period = vol_period # '1M', '2M', or '3M'
         self.current_leverage = 1.0
-
-    def rebalance(self, date, cash_to_add=0, row=None):
-        current_total = self.total_value() + cash_to_add
         
-        if row is None:
-            return
 
+    def get_desired_leverage(self, row):
         # T-Bill rate as proxy for risk-free rate (RF)
         rf = row[T_BILL_3M_COL] / 100.0
-        vol_col = f"{self.ticker}_rvol_{self.vol_period}"
-        vol = row.get(vol_col, 0)
-        
-        if vol > 0:
-            leverage = self.alpha + self.beta * (self.target_return - rf) / (vol**2)
-        else:
-            leverage = self.alpha
-            
-        # Cut off between LEVERAGE_MIN and LEVERAGE_MAX
-        leverage = max(self.LEVERAGE_MIN, min(self.LEVERAGE_MAX, leverage))
+        vol = row.get(f"{self.ticker}_rvol_{self.vol_period}", 0)
+
+        leverage = self.alpha + self.beta * (self.target_return - rf) / (vol**2)
+        return max(self.LEVERAGE_MIN, min(self.LEVERAGE_MAX, leverage))
+
+    def rebalance(self, date, row, cash_to_add=0):
+        current_total = self.total_value() + cash_to_add
+
+        leverage = self.get_desired_leverage(row)
         self.current_leverage = leverage
         
         # Calculate weights for TICKER, TICKERx3, and SGOV
@@ -179,6 +174,7 @@ class Backtester:
     DEFAULT_START_DATE = '2005-01-01'
 
     def __init__(self, csv_path=DATA_FILE, initial_amt=DEFAULT_INITIAL_AMT, monthly_cf=0, start_date=DEFAULT_START_DATE, end_date=None):
+        print(f"Initializing Backtester with CSV path: {csv_path}")
         self.initial_amt = initial_amt  
         self.monthly_cf = monthly_cf
         

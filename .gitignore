@@ -42,5 +42,6 @@ venv.bak/
 Thumbs.db
 
 # processed data
-backtest/combined_data.csv
+backtest/data/
+backtest/results/
 

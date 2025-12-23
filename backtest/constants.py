@@ -10,7 +10,7 @@ DAYS_PER_YEAR = 365.25 # For CAGR calculation
 # File Paths
 RATES_FILE = os.path.join(BASE_DIR, 'rates.csv')
 RETURNS_FILE = os.path.join(BASE_DIR, 'returns.csv')
-DATA_FILE = os.path.join(BASE_DIR, 'combined_data.csv')
+DATA_FILE = os.path.join(BASE_DIR, 'data', 'combined_data.csv')
 
 # Column Names
 DATE_COL = 'Date'
