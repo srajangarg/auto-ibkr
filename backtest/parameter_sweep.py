@@ -10,11 +10,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from backtester import Backtester, DynamicLeveragedPortfolio
 from constants import TOTAL_VALUE_COL
 
-def run_simulation(alpha, beta, vol_period, target_return, bt):
-    TICKER = 'QQQ'
-
+def run_simulation(alpha, beta, vol_period, target_return, bt, ticker):
     portfolio = DynamicLeveragedPortfolio(
-        ticker=TICKER,
+        ticker=ticker,
         alpha=alpha,
         beta=beta,
         target_return=target_return,
@@ -37,18 +35,20 @@ def run_simulation(alpha, beta, vol_period, target_return, bt):
     }
 
 def run_sweep():
-    bt = Backtester()
+    ticker = 'SOXX'
+    monthly_cf = 200
+    bt = Backtester(monthly_cf=monthly_cf)
     
     # Special Cases
     special_alphas = [1.0, 1.2, 1.5, 2.0]
     special_beta = 0.0
     special_vol_period = '1M'
-    special_target_return = 0.12
+    special_target_return = 0.13
     
-    print(f"Running {len(special_alphas)} special cases...")
+    print(f"Running {len(special_alphas)} special cases for {ticker} (CF: {monthly_cf})...")
     special_results = []
     for alpha in special_alphas:
-        res = run_simulation(alpha, special_beta, special_vol_period, special_target_return, bt)
+        res = run_simulation(alpha, special_beta, special_vol_period, special_target_return, bt, ticker)
         special_results.append(res)
     
     # Ranges for sweep
@@ -63,7 +63,7 @@ def run_sweep():
         for beta in betas:
             for vol_period in vol_periods:
                 for target_return in target_returns:
-                    res = run_simulation(alpha, beta, vol_period, target_return, bt)
+                    res = run_simulation(alpha, beta, vol_period, target_return, bt, ticker)
                     sweep_results.append(res)
     
     # Create DataFrames
@@ -76,7 +76,8 @@ def run_sweep():
     # Combine: special cases at top, then sorted sweep
     df_final = pd.concat([df_special, df_sweep], ignore_index=True)
     
-    output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results', 'sweep_results.csv')
+    filename = f'sweep_results_{ticker}_cf{monthly_cf}.csv'
+    output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results', filename)
     df_final.to_csv(output_file, index=False)
     print(f"Sweep completed. Results saved to {output_file}")
 

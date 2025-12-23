@@ -67,10 +67,7 @@ def combine_and_convert():
 
     # Save to a new file
     combined_df.to_csv(DATA_FILE)
-    
-    print(f"Successfully combined data and saved to {DATA_FILE}")
-    print("\nFirst few rows of combined data:")
-    print(combined_df.head())
+
 
 if __name__ == "__main__":
     combine_and_convert()

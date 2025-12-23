@@ -111,12 +111,10 @@ class StaticPortfolio(BasePortfolio):
         self.positions = {asset: current_total * weight for asset, weight in self.target_weights.items()}
 
 class DynamicLeveragedPortfolio(BasePortfolio):
-    LEVERAGE_MIN = 0.4
-    LEVERAGE_MAX = 2.0
     LEVERAGE_THRESHOLD = 1.0
     TICKER_X3_MULTIPLIER = 3.0
 
-    def __init__(self, ticker, alpha, beta, target_return, vol_period, min_leverage=LEVERAGE_MIN, max_leverage=LEVERAGE_MAX):
+    def __init__(self, ticker, alpha, beta, target_return, vol_period = '1M', min_leverage=0.4, max_leverage=2.0):
         """
         Dynamic leverage based on volatility and excess return.
         desired_leverage = alpha + beta * (target_return - RF) / (vol**2)
@@ -129,6 +127,8 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         self.target_return = target_return
         self.vol_period = vol_period # '1M', '2M', or '3M'
         self.current_leverage = 1.0
+        self.min_leverage = min_leverage
+        self.max_leverage = max_leverage
         
 
     def get_desired_leverage(self, row):
@@ -137,7 +137,7 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         vol = row.get(f"{self.ticker}_rvol_{self.vol_period}", 0)
 
         leverage = self.alpha + self.beta * (self.target_return - rf) / (vol**2)
-        return max(self.LEVERAGE_MIN, min(self.LEVERAGE_MAX, leverage))
+        return max(self.min_leverage, min(self.max_leverage, leverage))
 
     def rebalance(self, date, row, cash_to_add=0):
         current_total = self.total_value() + cash_to_add
@@ -174,6 +174,10 @@ class Backtester:
     DEFAULT_START_DATE = '2005-01-01'
 
     def __init__(self, csv_path=DATA_FILE, initial_amt=DEFAULT_INITIAL_AMT, monthly_cf=0, start_date=DEFAULT_START_DATE, end_date=None):
+        if not os.path.exists(csv_path):
+            from combine_data import combine_and_convert
+            combine_and_convert()
+
         print(f"Initializing Backtester with CSV path: {csv_path}")
         self.initial_amt = initial_amt  
         self.monthly_cf = monthly_cf
@@ -243,52 +247,24 @@ if __name__ == "__main__":
     import sys
     import os
     
-    # Use the combined file from constants
-    csv_file = DATA_FILE
-    
-    if not os.path.exists(csv_file):
-        print(f"Data file {csv_file} not found. Running combine_data.py to generate it...")
-        try:
-            from combine_data import combine_and_convert
-            combine_and_convert()
-            # After running, check again. Note: COMBINED_FILE is what combine_and_convert saves to.
-            if not os.path.exists(csv_file):
-                print(f"Error: {csv_file} still not found after running combine_data.py.")
-                sys.exit(1)
-        except ImportError:
-            print("Error: Could not import combine_and_convert from combine_data.py")
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error running combine_data.py: {e}")
-            sys.exit(1)
-    
-    # Simulation Parameters
-    params = {
-        'initial_amt': Backtester.DEFAULT_INITIAL_AMT,
-        # 'monthly_cf': 100,
-        # 'start_date': Backtester.DEFAULT_START_DATE,
-    }
-    
     # Define Portfolios to Compare
     portfolios = {
         'QQQ': StaticPortfolio({'QQQ': 100}),      
-        'QQQx1.5': StaticPortfolio({'QQQ': 75, 'QQQx3': 25}),      
-        'QQQx2': StaticPortfolio({'QQQ': 50, 'QQQx3': 50}),      
+        'QQQx2': StaticPortfolio({'QQQ': 50, 'QQQx3': 50}),
         'QQQx3': StaticPortfolio({'QQQ': 0, 'QQQx3': 100}),      
-        'QQQ_dyn_1.0_0.05': DynamicLeveragedPortfolio('QQQ', alpha=1.0, beta=0.05, target_return=0.12, vol_period='1M'),
-        'QQQ_dyn_1.0_0.10': DynamicLeveragedPortfolio('QQQ', alpha=1.0, beta=0.10, target_return=0.12, vol_period='1M'),
-        'QQQ_dyn_1.0_0.15': DynamicLeveragedPortfolio('QQQ', alpha=1.0, beta=0.15, target_return=0.12, vol_period='1M'),
-        'QQQ_dyn_1.0_0.20': DynamicLeveragedPortfolio('QQQ', alpha=1.0, beta=0.20, target_return=0.12, vol_period='1M'),
+        'QQQ_dyn_0.0_0.7': DynamicLeveragedPortfolio('QQQ', alpha=0.0, beta=0.7, target_return=0.12, vol_period='1M'),
     }
     
     all_metrics = {}
+    all_histories = {}
     
     # Initialize backtester once
-    bt = Backtester(csv_file, **params)
+    bt = Backtester()
     print(f"\nRunning backtests from {bt.actual_start.date()} to {bt.actual_end.date()}")
     
     for name, portfolio in portfolios.items():
-        bt.run(portfolio)
+        history_df = bt.run(portfolio)
+        all_histories[name] = history_df
         metrics = portfolio.calculate_metrics()
         all_metrics[name] = metrics
         
@@ -314,3 +290,12 @@ if __name__ == "__main__":
     print()
     print(comparison_df)
     print()
+
+    # Plot results
+    try:
+        from plotting import plot_portfolio_comparison
+        plot_portfolio_comparison(all_histories, title=f"QQQ Strategy Comparison ({bt.actual_start.date()} to {bt.actual_end.date()})")
+    except ImportError:
+        print("Plotly or plotting.py not found. Skipping plot.")
+    except Exception as e:
+        print(f"Error generating plot: {e}")
