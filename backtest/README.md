@@ -5,7 +5,7 @@ This directory contains a backtesting engine for evaluating trading strategies u
 ## Data Sources
 
 - `rates.csv`: Historical treasury yields (10Y, 2Y, 3M) downloaded from [testfol.io](https://testfol.io/).
-- `returns.csv`: Historical price levels/returns for various tickers (e.g., QQQ, QQQx3) downloaded from [testfol.io](https://testfol.io/).
+- `returns.csv`: Historical price levels/returns for various tickers (e.g., QQQ, QQQx3) downloaded from [testfol.io](https://testfol.io/). You can use QQQ?L=3 to get the simulated version of 3x leveraged QQQ. I have compared it against TQQQ on the available dates and it tracks very well. Same for SOXX?L=3 and SOXL
 
 ## Data Preparation
 

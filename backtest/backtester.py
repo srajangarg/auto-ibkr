@@ -57,7 +57,6 @@ class DynamicLeveragedPortfolio(BasePortfolio):
     LEVERAGE_MAX = 2.0
     LEVERAGE_THRESHOLD = 1.0
     TICKER_X3_MULTIPLIER = 3.0
-    SGOV_TICKER = 'SGOV'
 
     def __init__(self, ticker, alpha, beta, target_return, vol_period):
         """
