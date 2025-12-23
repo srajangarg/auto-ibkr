@@ -26,11 +26,25 @@ Before running a backtest, the raw data files need to be combined and processed.
     - `StaticPortfolio`: Rebalances to fixed target weights monthly.
     - `DynamicLeveragedPortfolio`: Adjusts leverage based on trailing volatility and target returns.
     - `Backtester`: The engine that iterates through historical data, applies returns, handles monthly cashflows, and calculates performance metrics (CAGR, Sharpe Ratio, Max Drawdown, etc.).
+- `parameter_sweep.py`: A utility script to find optimal strategy parameters.
+    - Runs simulations across ranges of `alpha` and `beta`.
+    - Includes "Special Case" configurations for comparison (e.g., fixed leverage benchmarks).
+    - Saves results to the `results/` directory for analysis.
 
 ## How to Run
 
-To run the default backtest comparison:
+### Default Comparison
+To run the default backtest comparison between static and dynamic portfolios:
 
 ```bash
 python backtester.py
 ```
+
+### Parameter Sweep
+To find optimal parameters for the `DynamicLeveragedPortfolio`:
+
+```bash
+python parameter_sweep.py
+```
+
+Results will be saved to `backtest/results/sweep_results_<TICKER>_cf<CASHFLOW>.csv`.
