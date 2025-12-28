@@ -65,6 +65,9 @@ def combine_and_convert():
     # Drop the first row which will have NaN for returns
     combined_df.dropna(inplace=True)
 
+    # Create parent directory if it doesn't exist
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+
     # Save to a new file
     combined_df.to_csv(DATA_FILE)
 
