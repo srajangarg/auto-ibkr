@@ -5,7 +5,9 @@ import os
 import sys
 
 # Add the current directory to sys.path to allow importing constants
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from constants import (
     TRADING_DAYS_PER_YEAR,
     RATES_FILE,

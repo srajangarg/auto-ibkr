@@ -5,7 +5,8 @@ import os
 import sys
 
 # Add the current directory to sys.path to allow importing from backtester and constants
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+if __name__ == "__main__":
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtester import Backtester, DynamicLeveragedPortfolio
 from constants import TOTAL_VALUE_COL
@@ -78,6 +79,10 @@ def run_sweep():
     
     filename = f'sweep_results_{ticker}_cf{monthly_cf}.csv'
     output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results', filename)
+    
+    # Create results directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
     df_final.to_csv(output_file, index=False)
     print(f"Sweep completed. Results saved to {output_file}")
 
