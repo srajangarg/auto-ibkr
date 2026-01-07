@@ -66,7 +66,7 @@ def plot_realized_volatility(csv_path, ticker):
 
 if __name__ == "__main__":
     # Add the current directory to sys.path to allow importing constants
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import DATA_FILE
 
     # Default to QQQ if no ticker provided
