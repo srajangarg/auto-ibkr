@@ -30,6 +30,7 @@ def create_layout():
             ], md=10),
             dbc.Col([
                 html.Div([
+                    dbc.Button("Clear Cache", id='clear-cache-btn', color='secondary', size='sm', outline=True, className="me-3"),
                     dbc.Label("Dark Mode", className="me-2", style={"fontSize": "0.9rem"}),
                     dbc.Switch(id='dark-mode-switch', value=True, className="d-inline-block")
                 ], className="d-flex align-items-center justify-content-end mt-4")

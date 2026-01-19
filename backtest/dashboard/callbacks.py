@@ -10,6 +10,7 @@ from constants import (
 from dash import Input, Output, State, ALL, ctx, no_update, html
 import dash_bootstrap_components as dbc
 from .services.backtest_service import run_portfolio_analysis
+from .services.cache import results_cache
 from .components.charts import (
     create_metrics_grid,
     create_multi_metrics_grid,
@@ -98,6 +99,18 @@ def register_callbacks(app):
         if dark_mode is None:
             dark_mode = True
         return dark_mode, THEME_DARK if dark_mode else THEME_LIGHT
+
+    @app.callback(
+        Output('clear-cache-btn', 'children'),
+        Input('clear-cache-btn', 'n_clicks'),
+        prevent_initial_call=True
+    )
+    def clear_cache(n_clicks):
+        """Clear the persistent cache."""
+        if n_clicks:
+            results_cache.clear()
+            print("Cache cleared")
+        return "Clear Cache"
 
     @app.callback(
         Output('active-simulations-store', 'data'),
