@@ -123,6 +123,14 @@ METRIC_CONFIG = {
     }
 }
 
+# Multi-selection color palette (up to 4 distinct colors for overlaid distributions)
+MULTI_SELECT_COLORS = [
+    {'fill': 'rgba(6, 182, 212, 0.5)', 'line': '#06b6d4'},    # Cyan
+    {'fill': 'rgba(168, 85, 247, 0.5)', 'line': '#a855f7'},   # Purple
+    {'fill': 'rgba(34, 197, 94, 0.5)', 'line': '#22c55e'},    # Green
+    {'fill': 'rgba(251, 146, 60, 0.5)', 'line': '#fb923c'},   # Orange
+]
+
 
 def create_distribution_chart(
     results: SimulationResults,
@@ -261,6 +269,97 @@ def create_metrics_grid(results: SimulationResults, dark_mode: bool = False) -> 
     if dark_mode:
         _apply_dark_theme(fig, theme)
         # Update subplot title colors for dark mode
+        for annotation in fig['layout']['annotations']:
+            annotation['font'] = dict(color=theme['text_color'], size=14)
+    else:
+        fig.update_layout(template=theme['template'])
+
+    return fig
+
+
+def create_multi_metrics_grid(
+    results_list: list,
+    dark_mode: bool = False
+) -> go.Figure:
+    """Create 2x2 grid of overlaid distribution charts for multiple portfolios.
+
+    Args:
+        results_list: List of tuples (portfolio_name, SimulationResults)
+        dark_mode: Enable dark mode styling
+
+    Returns:
+        Plotly Figure with 2x2 subplots with overlaid histograms
+    """
+    theme = get_theme(dark_mode)
+    metrics = ['cagr', 'max_drawdown', 'sharpe_ratio', 'annual_volatility']
+    titles = [METRIC_CONFIG[m]['display_name'] for m in metrics]
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=titles,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.15
+    )
+
+    for i, metric in enumerate(metrics):
+        row = i // 2 + 1
+        col = i % 2 + 1
+        config = METRIC_CONFIG[metric]
+
+        # Add histogram for each portfolio (overlaid)
+        for j, (label, results) in enumerate(results_list):
+            color_cfg = MULTI_SELECT_COLORS[j % len(MULTI_SELECT_COLORS)]
+            values = results.get_metric_distribution(metric)
+
+            fig.add_trace(
+                go.Histogram(
+                    x=values,
+                    nbinsx=30,
+                    marker_color=color_cfg['fill'],
+                    marker_line_color=color_cfg['line'],
+                    marker_line_width=1,
+                    opacity=0.6,
+                    name=label,
+                    legendgroup=label,
+                    showlegend=(i == 0),  # Only show legend in first subplot
+                ),
+                row=row, col=col
+            )
+
+        # Add historical lines for each portfolio
+        for j, (label, results) in enumerate(results_list):
+            if results.historical is not None:
+                historical_value = getattr(results.historical, metric)
+                color_cfg = MULTI_SELECT_COLORS[j % len(MULTI_SELECT_COLORS)]
+                fig.add_vline(
+                    x=historical_value,
+                    line_dash="dash",
+                    line_color=color_cfg['line'],
+                    line_width=2,
+                    row=row, col=col
+                )
+
+        # Format axis
+        if config['format'].endswith('%'):
+            fig.update_xaxes(tickformat=config['format'], row=row, col=col)
+
+    fig.update_layout(
+        height=600,
+        showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5
+        ),
+        margin=dict(l=50, r=50, t=100, b=50),  # Extra top margin for legend
+        barmode='overlay'  # Overlay histograms
+    )
+
+    # Apply theme
+    if dark_mode:
+        _apply_dark_theme(fig, theme)
         for annotation in fig['layout']['annotations']:
             annotation['font'] = dict(color=theme['text_color'], size=14)
     else:
@@ -599,7 +698,7 @@ def create_results_grid(
     active_simulations: list,
     portfolio_names: dict,
     simulation_names: dict,
-    selected_cell: dict,
+    selected_cells: list,
     dark_mode: bool = False,
     metric: str = 'cagr'
 ):
@@ -616,7 +715,7 @@ def create_results_grid(
         active_simulations: List of active simulation IDs (columns)
         portfolio_names: Dict mapping portfolio_id -> display_name
         simulation_names: Dict mapping simulation_id -> display_name
-        selected_cell: Dict with 'portfolio_id' and 'simulation_id' keys
+        selected_cells: List of dicts with 'portfolio_id' and 'simulation_id' keys (multi-select)
         dark_mode: Enable dark mode styling
         metric: Which metric to display ('cagr', 'sharpe_ratio', 'max_drawdown', 'annual_volatility')
 
@@ -742,11 +841,11 @@ def create_results_grid(
             else:
                 bg_color = theme['table_cell_fill']
 
-            # Determine if this cell is selected
-            is_selected = (
-                selected_cell and
-                selected_cell.get('portfolio_id') == portfolio_id and
-                selected_cell.get('simulation_id') == sim_id
+            # Determine if this cell is selected (check against list)
+            is_selected = any(
+                cell.get('portfolio_id') == portfolio_id and
+                cell.get('simulation_id') == sim_id
+                for cell in (selected_cells or [])
             )
 
             row_cells.append(html.Td(

@@ -26,8 +26,8 @@ def create_layout():
         dcc.Store(id='active-simulations-store', data=[]),
         # Store for all results keyed by "portfolio_id|simulation_id"
         dcc.Store(id='all-results-store', data={}),
-        # Store for selected cell (portfolio_id, simulation_id) for viewing distributions
-        dcc.Store(id='selected-cell-store', data=None),
+        # Store for selected cells (list of {portfolio_id, simulation_id} dicts for multi-select)
+        dcc.Store(id='selected-cell-store', data=[]),
 
         # Header with dark mode toggle
         dbc.Row([
