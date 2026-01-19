@@ -11,6 +11,9 @@ def create_layout():
         Dash layout component
     """
     return dbc.Container([
+        # Store for active portfolios (persists client-side)
+        dcc.Store(id='active-portfolios-store', data=[]),
+
         # Header
         dbc.Row([
             dbc.Col([
@@ -22,6 +25,34 @@ def create_layout():
             ])
         ]),
 
+        # Portfolio Manager Section
+        dbc.Card([
+            dbc.CardHeader(html.H5("Portfolio Manager", className="mb-0")),
+            dbc.CardBody([
+                dbc.Row([
+                    # Available Portfolios (left side)
+                    dbc.Col([
+                        html.Label("Available Portfolios", className="fw-bold mb-2"),
+                        html.Div(
+                            id='available-portfolios-list',
+                            children=_create_available_portfolios_list([])
+                        )
+                    ], md=6),
+
+                    # Active Portfolios (right side)
+                    dbc.Col([
+                        html.Label("Active Portfolios", className="fw-bold mb-2"),
+                        html.Div(
+                            id='active-portfolios-list',
+                            children=[
+                                html.P("No portfolios added yet.", className="text-muted")
+                            ]
+                        )
+                    ], md=6)
+                ])
+            ])
+        ], className="mb-4"),
+
         # Controls Row
         dbc.Card([
             dbc.CardBody([
@@ -30,9 +61,10 @@ def create_layout():
                         html.Label("Portfolio", className="fw-bold"),
                         dcc.Dropdown(
                             id='portfolio-dropdown',
-                            options=registry.get_dropdown_options(),
-                            value='qqq_100',
+                            options=[],
+                            value=None,
                             clearable=False,
+                            placeholder="Add portfolios above first...",
                             className="mb-2"
                         )
                     ], md=3),
@@ -110,38 +142,87 @@ def create_layout():
                         ),
                         dcc.Graph(id='distributions-grid')
                     ])
-                ], className="mb-4"),
-
-                # Detailed metric view
-                dbc.Card([
-                    dbc.CardHeader([
-                        dbc.Row([
-                            dbc.Col(html.H5("Detailed Metric View", className="mb-0"), md=6),
-                            dbc.Col([
-                                dcc.Dropdown(
-                                    id='metric-dropdown',
-                                    options=[
-                                        {'label': 'CAGR', 'value': 'cagr'},
-                                        {'label': 'Max Drawdown', 'value': 'max_drawdown'},
-                                        {'label': 'Sharpe Ratio', 'value': 'sharpe_ratio'},
-                                        {'label': 'Annual Volatility', 'value': 'annual_volatility'},
-                                        {'label': 'Total Value', 'value': 'total_value'}
-                                    ],
-                                    value='cagr',
-                                    clearable=False,
-                                    style={'minWidth': '200px'}
-                                )
-                            ], md=6, className="d-flex justify-content-end")
-                        ], align="center")
-                    ]),
-                    dbc.CardBody([
-                        dcc.Graph(id='detail-distribution')
-                    ])
                 ])
             ]
         ),
 
-        # Store for results data (allows sharing between callbacks)
-        dcc.Store(id='results-store')
-
     ], fluid=True, className="py-4")
+
+
+def _create_available_portfolios_list(active_ids: list) -> list:
+    """Create the list of available portfolios with add buttons.
+
+    Args:
+        active_ids: List of currently active portfolio IDs
+
+    Returns:
+        List of Dash components
+    """
+    items = []
+    for portfolio in registry.list_all():
+        is_active = portfolio.id in active_ids
+        items.append(
+            dbc.ListGroupItem([
+                dbc.Row([
+                    dbc.Col([
+                        html.Strong(portfolio.display_name),
+                        html.Br(),
+                        html.Small(portfolio.description, className="text-muted")
+                    ], width=9),
+                    dbc.Col([
+                        dbc.Button(
+                            "Added" if is_active else "Add",
+                            id={'type': 'add-portfolio-btn', 'index': portfolio.id},
+                            color='secondary' if is_active else 'success',
+                            size='sm',
+                            disabled=is_active,
+                            className='w-100'
+                        )
+                    ], width=3, className="d-flex align-items-center")
+                ], align="center")
+            ])
+        )
+    return [dbc.ListGroup(items)] if items else [html.P("No portfolios available.", className="text-muted")]
+
+
+def create_active_portfolios_list(active_ids: list) -> list:
+    """Create the list of active portfolios with remove buttons.
+
+    Args:
+        active_ids: List of currently active portfolio IDs
+
+    Returns:
+        List of Dash components
+    """
+    if not active_ids:
+        return [html.P("No portfolios added yet.", className="text-muted")]
+
+    items = []
+    for portfolio_id in active_ids:
+        try:
+            portfolio = registry.get(portfolio_id)
+            items.append(
+                dbc.ListGroupItem([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Strong(portfolio.display_name),
+                            html.Br(),
+                            html.Small(portfolio.description, className="text-muted")
+                        ], width=9),
+                        dbc.Col([
+                            dbc.Button(
+                                "Remove",
+                                id={'type': 'remove-portfolio-btn', 'index': portfolio_id},
+                                color='danger',
+                                size='sm',
+                                outline=True,
+                                className='w-100'
+                            )
+                        ], width=3, className="d-flex align-items-center")
+                    ], align="center")
+                ])
+            )
+        except KeyError:
+            continue
+
+    return [dbc.ListGroup(items)] if items else [html.P("No portfolios added yet.", className="text-muted")]

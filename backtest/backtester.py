@@ -84,9 +84,9 @@ class BasePortfolio(ABC):
         return {
             TOTAL_VALUE_COL: round(float(total_value), 4),
             'Total Contributions': round(float(self.total_contributions), 4),
-            'CAGR': round(float(cagr), 4),
-            'Max Drawdown': round(float(max_drawdown), 4),
-            'Annual Volatility': round(float(volatility), 4),
+            'CAGR': round(float(cagr), 6),
+            'Max Drawdown': round(float(max_drawdown), 6),
+            'Annual Volatility': round(float(volatility), 6),
             'Sharpe Ratio': round(float(sharpe), 4)
         }
 
@@ -233,34 +233,66 @@ class Backtester:
 
     def run(self, portfolio: BasePortfolio):
         portfolio.total_contributions = self.initial_amt
-        
+
+        # Pre-compute month boundaries for faster checking
+        dates = self.df.index
+        months = dates.to_period('M')
+        month_changes = np.array(months[1:] != months[:-1])
+
+        # Get column indices for faster access
+        col_to_idx = {col: i for i, col in enumerate(self.df.columns)}
+
         # Initial rebalance/allocation
-        portfolio.rebalance(self.df.index[0], cash_to_add=self.initial_amt, row=self.df.iloc[0])
-        
-        last_month = None
-        
-        for date, row in self.df.iterrows():
-            current_month = (date.year, date.month)
-            
-            # Rebalance and Cashflow at the start of a new month
-            if last_month is not None and current_month != last_month:
+        first_row = self.df.iloc[0]
+        portfolio.rebalance(dates[0], cash_to_add=self.initial_amt, row=first_row)
+
+        # Pre-allocate history list with estimated size
+        portfolio.history = []
+
+        # Convert to numpy for faster iteration
+        data_values = self.df.values
+        sgov_idx = col_to_idx.get(SGOV_TICKER, -1)
+
+        for i, date in enumerate(dates):
+            # Check for month boundary (skip first row)
+            if i > 0 and month_changes[i - 1]:
                 portfolio.total_contributions += self.monthly_cf
+                # Need row as Series for rebalance
+                row = self.df.iloc[i]
                 portfolio.rebalance(date, cash_to_add=self.monthly_cf, row=row)
-            
-            # Capture value before daily market movement (includes any fresh cashflow)
+
+            # Capture value before daily market movement
             val_before = portfolio.total_value()
-            
-            # Apply daily returns
-            portfolio.update_positions(row)
-            
+
+            # Apply daily returns using dict lookup (faster than Series)
+            row_data = data_values[i]
+            for asset in portfolio.positions:
+                if asset in col_to_idx:
+                    portfolio.positions[asset] *= (1 + row_data[col_to_idx[asset]])
+
             total_val = portfolio.total_value()
-            
-            # Strategy return for the day (excludes impact of cash injections)
+
+            # Strategy return for the day
             daily_ret = (total_val / val_before - 1) if val_before != 0 else 0
-            
-            portfolio.record_snapshot(date, daily_ret, row)
-            last_month = current_month
-            
+
+            # Record snapshot with minimal overhead
+            sgov_val = row_data[sgov_idx] if sgov_idx >= 0 else 0
+            snapshot = {
+                DATE_COL: date,
+                TOTAL_VALUE_COL: total_val,
+                STRATEGY_RETURN_COL: daily_ret,
+                SGOV_TICKER: sgov_val
+            }
+            # Get extra history if portfolio has custom metrics
+            if i == 0 or (i > 0 and month_changes[i - 1]):
+                # Only call get_extra_history when we have a row (after rebalance)
+                row = self.df.iloc[i]
+                snapshot.update(portfolio.get_extra_history(row))
+            elif hasattr(portfolio, 'current_leverage'):
+                # For dynamic portfolios, record leverage without full row
+                snapshot['Leverage'] = portfolio.current_leverage
+            portfolio.history.append(snapshot)
+
         return portfolio.get_history_df()
 
 if __name__ == "__main__":

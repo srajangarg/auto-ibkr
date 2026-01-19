@@ -41,6 +41,41 @@ Before running a backtest, the raw data files need to be combined and processed.
         - GARCH(1,1) volatility dynamics (`use_garch=True`)
         - Time-varying risk-free rates via `RFSchedule`
         - Equity risk premium modeling (`use_erp=True`): ties equity returns to RF rate
+    - **Performance optimizations**: Cached parameter derivation, cached date ranges, vectorized backtester loop
+
+## Dashboard
+
+The `dashboard/` directory contains a Dash-based web interface for interactive backtesting.
+
+### Structure
+- `app.py`: Dash app factory
+- `layouts.py`: UI layout with Portfolio Manager section
+- `callbacks.py`: Event handlers for interactivity
+- `components/charts.py`: Plotly chart builders
+- `portfolios/registry.py`: Extensible portfolio registry pattern
+- `portfolios/presets.py`: Predefined portfolio configurations
+- `services/backtest_service.py`: Service layer orchestrating simulations
+- `services/cache.py`: LRU cache for results
+
+### Available Portfolios
+| ID | Name | Description |
+|----|------|-------------|
+| `qqq_100` | QQQ (100%) | Unleveraged QQQ |
+| `qqq_1_5x` | 1.5x Leveraged QQQ | 75% QQQ + 25% QQQx3 |
+| `qqq_2x` | 2x Leveraged QQQ | 50% QQQ + 50% QQQx3 |
+| `qqq_dynamic` | Dynamic Leveraged QQQ | Volatility-adjusted (alpha=0, beta=0.7, target=12%) |
+
+### Running the Dashboard
+```bash
+python run_dashboard.py
+```
+Then open http://localhost:8050 in your browser.
+
+### Dashboard Features
+- **Portfolio Manager**: Add/remove portfolios from the active set
+- **Single Portfolio Dropdown**: Select which portfolio to analyze
+- **Configurable Parameters**: Initial investment, monthly contributions, MC simulations
+- **Results Display**: Summary statistics table and 2x2 distribution grid
 
 ## How to Run
 

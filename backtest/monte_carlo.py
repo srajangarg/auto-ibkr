@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+from functools import lru_cache
 import os
 import sys
 
@@ -21,6 +22,10 @@ from constants import (
     VOLATILITY_WINDOWS
 )
 from backtester import Backtester
+
+
+# Cache for date ranges to avoid repeated generation
+_DATE_RANGE_CACHE: dict[int, pd.DatetimeIndex] = {}
 
 
 @dataclass
@@ -186,8 +191,11 @@ def generate_rf_path(schedule: RFSchedule, num_days: int) -> np.ndarray:
         raise ValueError(f"Unknown schedule_type: {schedule.schedule_type}")
 
 
+@lru_cache(maxsize=128)
 def fit_garch_params(ticker: str, csv_path: str = DATA_FILE) -> dict:
     """Fit GARCH(1,1) parameters to historical returns.
+
+    Results are cached to avoid repeated fitting.
 
     Args:
         ticker: Ticker symbol
@@ -282,10 +290,12 @@ def generate_garch_returns(
     return returns, annualized_vols
 
 
+@lru_cache(maxsize=128)
 def derive_equity_risk_premium(ticker: str, csv_path: str = DATA_FILE) -> float:
     """Calculate historical equity risk premium.
 
     ERP = annualized(mean equity return) - annualized(mean risk-free return)
+    Results are cached to avoid repeated CSV reads.
 
     Args:
         ticker: Equity ticker symbol
@@ -347,8 +357,11 @@ class HistoricalConfig:
     end_date: Optional[str] = None
 
 
+@lru_cache(maxsize=128)
 def derive_params_from_historical(ticker: str, csv_path: str = DATA_FILE) -> tuple:
     """Extract mean return and volatility from historical data.
+
+    Results are cached to avoid repeated CSV reads.
 
     Returns:
         tuple: (annualized_mean_return, annualized_volatility)
@@ -366,6 +379,14 @@ def derive_params_from_historical(ticker: str, csv_path: str = DATA_FILE) -> tup
     vol_annual = std_daily * np.sqrt(TRADING_DAYS_PER_YEAR)
 
     return mean_annual, vol_annual
+
+
+def _get_cached_date_range(num_days: int) -> pd.DatetimeIndex:
+    """Get or create a cached date range for MC simulations."""
+    if num_days not in _DATE_RANGE_CACHE:
+        start_date = pd.Timestamp('2000-01-01')
+        _DATE_RANGE_CACHE[num_days] = pd.bdate_range(start=start_date, periods=num_days)
+    return _DATE_RANGE_CACHE[num_days]
 
 
 def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> pd.DataFrame:
@@ -420,9 +441,8 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
             else:
                 erp_values[ticker] = derive_equity_risk_premium(ticker)
 
-    # Generate date index
-    start_date = pd.Timestamp('2000-01-01')
-    dates = pd.bdate_range(start=start_date, periods=num_days)
+    # Generate date index (cached to avoid repeated generation)
+    dates = _get_cached_date_range(num_days)
 
     # Generate returns for each ticker
     data = {}
