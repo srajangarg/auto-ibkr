@@ -21,8 +21,6 @@ simulation_registry.register(SimulationDefinition(
         start_rate=0.04,
         end_rate=0.04
     ),
-    num_simulations=50,
-    num_years=20,
     category="baseline"
 ))
 
@@ -39,8 +37,6 @@ simulation_registry.register(SimulationDefinition(
         start_rate=0.01,
         end_rate=0.05
     ),
-    num_simulations=50,
-    num_years=20,
     category="stress"
 ))
 
@@ -58,8 +54,6 @@ simulation_registry.register(SimulationDefinition(
         end_rate=0.03,
         midpoint_rate=0.005
     ),
-    num_simulations=50,
-    num_years=20,
     category="stress"
 ))
 
@@ -76,7 +70,5 @@ simulation_registry.register(SimulationDefinition(
         start_rate=0.025,
         end_rate=0.025
     ),
-    num_simulations=50,
-    num_years=20,
     category="optimistic"
 ))

@@ -1,3 +1,3 @@
 """Simulation presets package."""
-from .registry import SimulationDefinition, SimulationRegistry, simulation_registry
+from .registry import SimulationDefinition, simulation_registry
 from .presets import *  # Register all presets
