@@ -136,6 +136,10 @@ class DynamicLeveragedPortfolio(BasePortfolio):
         rf = row[T_BILL_3M_COL] / 100.0
         vol = row.get(f"{self.ticker}_rvol_{self.vol_period}", 0)
 
+        # Guard against zero/missing volatility - use min_leverage as fallback
+        if vol <= 0:
+            return self.min_leverage
+
         leverage = self.alpha + self.beta * (self.target_return - rf) / (vol**2)
         return max(self.min_leverage, min(self.max_leverage, leverage))
 

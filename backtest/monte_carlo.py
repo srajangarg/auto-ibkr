@@ -193,7 +193,12 @@ def generate_rf_path(schedule: RFSchedule, num_days: int) -> np.ndarray:
 
 
 @lru_cache(maxsize=128)
-def fit_garch_params(ticker: str, csv_path: str = DATA_FILE) -> dict:
+def fit_garch_params(
+    ticker: str,
+    csv_path: str = DATA_FILE,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> dict:
     """Fit GARCH(1,1) parameters to historical returns.
 
     Results are cached to avoid repeated fitting.
@@ -201,6 +206,8 @@ def fit_garch_params(ticker: str, csv_path: str = DATA_FILE) -> dict:
     Args:
         ticker: Ticker symbol
         csv_path: Path to historical data CSV
+        start_date: Optional start date filter (e.g., '2005-01-01')
+        end_date: Optional end date filter
 
     Returns:
         dict: {'omega': x, 'alpha': y, 'beta': z, 'long_run_var': w, 'mu': mean_return}
@@ -213,6 +220,12 @@ def fit_garch_params(ticker: str, csv_path: str = DATA_FILE) -> dict:
     df = pd.read_csv(csv_path, index_col=DATE_COL, parse_dates=True)
     if ticker not in df.columns:
         raise ValueError(f"Ticker '{ticker}' not found in historical data")
+
+    # Apply date filtering
+    if start_date is not None:
+        df = df[df.index >= start_date]
+    if end_date is not None:
+        df = df[df.index <= end_date]
 
     daily_returns = df[ticker].dropna() * 100  # arch expects percentage returns
 
@@ -292,7 +305,12 @@ def generate_garch_returns(
 
 
 @lru_cache(maxsize=128)
-def derive_equity_risk_premium(ticker: str, csv_path: str = DATA_FILE) -> float:
+def derive_equity_risk_premium(
+    ticker: str,
+    csv_path: str = DATA_FILE,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> float:
     """Calculate historical equity risk premium.
 
     ERP = annualized(mean equity return) - annualized(mean risk-free return)
@@ -301,6 +319,8 @@ def derive_equity_risk_premium(ticker: str, csv_path: str = DATA_FILE) -> float:
     Args:
         ticker: Equity ticker symbol
         csv_path: Path to historical data CSV
+        start_date: Optional start date filter (e.g., '2005-01-01')
+        end_date: Optional end date filter
 
     Returns:
         Annualized equity risk premium as decimal (e.g., 0.05 for 5%)
@@ -310,6 +330,12 @@ def derive_equity_risk_premium(ticker: str, csv_path: str = DATA_FILE) -> float:
         raise ValueError(f"Ticker '{ticker}' not found in historical data")
     if SGOV_TICKER not in df.columns:
         raise ValueError(f"Risk-free ticker '{SGOV_TICKER}' not found in historical data")
+
+    # Apply date filtering
+    if start_date is not None:
+        df = df[df.index >= start_date]
+    if end_date is not None:
+        df = df[df.index <= end_date]
 
     # Get overlapping data
     equity_returns = df[ticker].dropna()
@@ -337,6 +363,7 @@ class MonteCarloConfig:
         garch_params: Override GARCH params {ticker: {'omega': x, 'alpha': y, 'beta': z, ...}}
         use_erp: If True, equity returns = rf + equity_risk_premium (ties returns to rf)
         ticker_erp: Override ERP per ticker {ticker: erp_value}
+        historical_start_date: Start date for deriving params from historical data (default: '2005-01-01')
     """
     num_simulations: int = 1000
     num_days: int = 252 * 20  # 20 years
@@ -348,6 +375,7 @@ class MonteCarloConfig:
     garch_params: dict = field(default_factory=dict)
     use_erp: bool = False
     ticker_erp: dict = field(default_factory=dict)
+    historical_start_date: str = '2005-01-01'
 
 
 @dataclass
@@ -359,10 +387,21 @@ class HistoricalConfig:
 
 
 @lru_cache(maxsize=128)
-def derive_params_from_historical(ticker: str, csv_path: str = DATA_FILE) -> tuple:
+def derive_params_from_historical(
+    ticker: str,
+    csv_path: str = DATA_FILE,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> tuple:
     """Extract mean return and volatility from historical data.
 
     Results are cached to avoid repeated CSV reads.
+
+    Args:
+        ticker: Ticker symbol
+        csv_path: Path to historical data CSV
+        start_date: Optional start date filter (e.g., '2005-01-01')
+        end_date: Optional end date filter
 
     Returns:
         tuple: (annualized_mean_return, annualized_volatility)
@@ -370,6 +409,12 @@ def derive_params_from_historical(ticker: str, csv_path: str = DATA_FILE) -> tup
     df = pd.read_csv(csv_path, index_col=DATE_COL, parse_dates=True)
     if ticker not in df.columns:
         raise ValueError(f"Ticker '{ticker}' not found in historical data")
+
+    # Apply date filtering
+    if start_date is not None:
+        df = df[df.index >= start_date]
+    if end_date is not None:
+        df = df[df.index <= end_date]
 
     daily_returns = df[ticker].dropna()
     mean_daily = daily_returns.mean()
@@ -425,11 +470,13 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
     if seed is not None:
         np.random.seed(seed)
 
-    num_days = config.num_days
+    # Add warmup period for rolling volatility calculation
+    warmup_days = max(VOLATILITY_WINDOWS.values())
+    total_days = config.num_days + warmup_days
     tickers = config.tickers
 
-    # Generate RF rate path
-    rf_path = generate_rf_path(config.rf_schedule, num_days)  # Annual rates
+    # Generate RF rate path (including warmup period)
+    rf_path = generate_rf_path(config.rf_schedule, total_days)  # Annual rates
     daily_rf = rf_path / TRADING_DAYS_PER_YEAR
 
     # Identify base tickers and leveraged tickers
@@ -457,7 +504,9 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
         if ticker in config.ticker_params:
             params[ticker] = config.ticker_params[ticker]
         else:
-            mean_ret, vol = derive_params_from_historical(ticker)
+            mean_ret, vol = derive_params_from_historical(
+                ticker, start_date=config.historical_start_date
+            )
             params[ticker] = {'mean_return': mean_ret, 'volatility': vol}
 
         # GARCH params (if enabled)
@@ -465,17 +514,21 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
             if ticker in config.garch_params:
                 garch_params_all[ticker] = config.garch_params[ticker]
             else:
-                garch_params_all[ticker] = fit_garch_params(ticker)
+                garch_params_all[ticker] = fit_garch_params(
+                    ticker, start_date=config.historical_start_date
+                )
 
         # Equity risk premium (if enabled)
         if config.use_erp:
             if ticker in config.ticker_erp:
                 erp_values[ticker] = config.ticker_erp[ticker]
             else:
-                erp_values[ticker] = derive_equity_risk_premium(ticker)
+                erp_values[ticker] = derive_equity_risk_premium(
+                    ticker, start_date=config.historical_start_date
+                )
 
     # Generate date index (cached to avoid repeated generation)
-    dates = _get_cached_date_range(num_days)
+    dates = _get_cached_date_range(total_days)
 
     # Generate returns for base tickers only
     data = {}
@@ -495,7 +548,7 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
 
                 # Generate GARCH returns with base mu, then adjust for RF
                 base_returns, vols = generate_garch_returns(
-                    num_days=num_days,
+                    num_days=total_days,
                     mu=mu_daily_base,  # Just the ERP component
                     omega=gp['omega'],
                     alpha=gp['alpha'],
@@ -510,7 +563,7 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
                 mu = params[ticker]['mean_return']
                 mu_daily = mu / TRADING_DAYS_PER_YEAR
                 daily_returns, vols = generate_garch_returns(
-                    num_days=num_days,
+                    num_days=total_days,
                     mu=mu_daily,
                     omega=gp['omega'],
                     alpha=gp['alpha'],
@@ -530,14 +583,14 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
                 erp = erp_values[ticker]
                 mu_daily = erp / TRADING_DAYS_PER_YEAR + daily_rf
 
-                z = np.random.standard_normal(num_days)
+                z = np.random.standard_normal(total_days)
                 daily_returns = mu_daily + sigma_daily * z
             else:
                 # Standard constant mean
                 mu = params[ticker]['mean_return']
                 mu_daily = mu / TRADING_DAYS_PER_YEAR
 
-                z = np.random.standard_normal(num_days)
+                z = np.random.standard_normal(total_days)
                 daily_returns = mu_daily + sigma_daily * z
 
         data[ticker] = daily_returns
@@ -574,8 +627,8 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
     df[T_NOTE_2Y_COL] = rf_path * 100 + 0.5  # Slightly higher spread
     df[T_BOND_10Y_COL] = rf_path * 100 + 1.0  # Higher spread
 
-    # Fill NaN from rolling calculations
-    df.fillna(0, inplace=True)
+    # Trim warmup period - volatility columns now have valid data from the start
+    df = df.iloc[warmup_days:].copy()
 
     return df
 
