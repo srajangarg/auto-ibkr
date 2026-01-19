@@ -49,11 +49,13 @@ The `dashboard/` directory contains a Dash-based web interface for interactive b
 
 ### Structure
 - `app.py`: Dash app factory
-- `layouts.py`: UI layout with Portfolio Manager section
+- `layouts.py`: UI layout with Portfolio Manager and MC Simulation Manager sections
 - `callbacks.py`: Event handlers for interactivity
-- `components/charts.py`: Plotly chart builders
+- `components/charts.py`: Plotly chart builders including 2D results grid
 - `portfolios/registry.py`: Extensible portfolio registry pattern
 - `portfolios/presets.py`: Predefined portfolio configurations
+- `simulations/registry.py`: Extensible MC simulation registry pattern
+- `simulations/presets.py`: Predefined MC simulation scenarios
 - `services/backtest_service.py`: Service layer orchestrating simulations
 - `services/cache.py`: LRU cache for results
 
@@ -65,6 +67,14 @@ The `dashboard/` directory contains a Dash-based web interface for interactive b
 | `qqq_2x` | 2x Leveraged QQQ | 50% QQQ + 50% QQQx3 |
 | `qqq_dynamic` | Dynamic Leveraged QQQ | Volatility-adjusted (alpha=0, beta=0.7, target=12%) |
 
+### Available MC Simulation Presets
+| ID | Name | Description | GARCH | ERP |
+|----|------|-------------|-------|-----|
+| `stable_market` | Stable Market | Constant 4% RF, no dynamics. Baseline. | No | No |
+| `rising_rates` | Rising Rates | 1%→5% (like 2022-2023 Fed hikes). Tests leverage stress. | Yes | Yes |
+| `crisis_recovery` | Crisis & Recovery | V-shaped rates 3%→0.5%→3% (COVID pattern). Tests volatility spikes. | Yes | Yes |
+| `low_vol_goldilocks` | Goldilocks | Steady 2.5% rates, muted volatility. Best-case scenario. | No | No |
+
 ### Running the Dashboard
 ```bash
 python run_dashboard.py
@@ -73,9 +83,17 @@ Then open http://localhost:8050 in your browser.
 
 ### Dashboard Features
 - **Portfolio Manager**: Add/remove portfolios from the active set
-- **Single Portfolio Dropdown**: Select which portfolio to analyze
+- **MC Simulation Manager**: Add/remove MC simulation presets from the active set
+- **Cross-Product Execution**: Runs all combinations of (active portfolios × active simulations)
+- **2D Results Grid**: Clickable matrix with selectable metric (CAGR, Sharpe, Drawdown, Volatility), color-coded red→green
 - **Configurable Parameters**: Initial investment, monthly contributions, MC simulations
-- **Results Display**: Summary statistics table and 2x2 distribution grid
+- **Distribution Analysis**: 2x2 grid of histograms for the selected cell (CAGR, Drawdown, Sharpe, Volatility)
+
+### Dashboard Development Guidelines
+- **Dark Mode Support**: All UI components must support dark mode. The dashboard uses DARKLY theme by default.
+  - Test both light and dark mode when adding new components
+  - Note: `dcc.Dropdown` may need custom styling for dark mode
+- **Theme Colors**: Use `get_theme(dark_mode)` from `components/charts.py` to get consistent colors
 
 ## How to Run
 

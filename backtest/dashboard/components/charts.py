@@ -94,27 +94,32 @@ METRIC_CONFIG = {
     'cagr': {
         'display_name': 'CAGR',
         'format': '.1%',
-        'format_fn': lambda x: f"{x*100:.2f}%"
+        'format_fn': lambda x: f"{x*100:.2f}%",
+        'higher_is_better': True,
     },
     'max_drawdown': {
         'display_name': 'Max Drawdown',
         'format': '.1%',
-        'format_fn': lambda x: f"{x*100:.2f}%"
+        'format_fn': lambda x: f"{x*100:.2f}%",
+        'higher_is_better': False,  # Less negative is better
     },
     'annual_volatility': {
         'display_name': 'Annual Volatility',
         'format': '.1%',
-        'format_fn': lambda x: f"{x*100:.2f}%"
+        'format_fn': lambda x: f"{x*100:.2f}%",
+        'higher_is_better': False,  # Lower volatility is better
     },
     'sharpe_ratio': {
         'display_name': 'Sharpe Ratio',
         'format': '.2f',
-        'format_fn': lambda x: f"{x:.2f}"
+        'format_fn': lambda x: f"{x:.2f}",
+        'higher_is_better': True,
     },
     'total_value': {
         'display_name': 'Total Value',
         'format': '$,.0f',
-        'format_fn': lambda x: f"${x:,.0f}"
+        'format_fn': lambda x: f"${x:,.0f}",
+        'higher_is_better': True,
     }
 }
 
@@ -557,6 +562,237 @@ def get_datatable_style(dark_mode: bool = False) -> dict:
             'overflowX': 'auto',
         },
     }
+
+
+def _get_color_for_value(value: float, min_val: float, max_val: float, higher_is_better: bool = True) -> str:
+    """Get a light green color with linear opacity based on value ranking.
+
+    Best value in the range gets full opacity, worst gets transparent.
+
+    Args:
+        value: The value to color
+        min_val: Minimum value in the range
+        max_val: Maximum value in the range
+        higher_is_better: If True, high value = high opacity; if False, low value = high opacity
+
+    Returns:
+        RGBA color string
+    """
+    if max_val == min_val:
+        return 'rgba(34, 197, 94, 0.5)'  # Medium opacity if all values are the same
+
+    # Normalize to 0-1
+    normalized = (value - min_val) / (max_val - min_val)
+
+    # If lower is better, invert so lower values get higher opacity
+    if not higher_is_better:
+        normalized = 1 - normalized
+
+    # Light green with linear opacity (0.1 to 0.6 range for subtlety)
+    opacity = 0.1 + (normalized * 0.5)
+    return f'rgba(34, 197, 94, {opacity:.2f})'
+
+
+def create_results_grid(
+    all_results: dict,
+    active_portfolios: list,
+    active_simulations: list,
+    portfolio_names: dict,
+    simulation_names: dict,
+    selected_cell: dict,
+    dark_mode: bool = False,
+    metric: str = 'cagr'
+):
+    """Create a 2D clickable grid showing selected metric for each portfolio × simulation combination.
+
+    Grid structure:
+    - Column 1: Portfolio name
+    - Column 2: Historical value (same for all simulations)
+    - Columns 3+: MC median values for each simulation (clickable, color-coded)
+
+    Args:
+        all_results: Dict mapping "portfolio_id|simulation_id" -> SimulationResults or dict
+        active_portfolios: List of active portfolio IDs (rows)
+        active_simulations: List of active simulation IDs (columns)
+        portfolio_names: Dict mapping portfolio_id -> display_name
+        simulation_names: Dict mapping simulation_id -> display_name
+        selected_cell: Dict with 'portfolio_id' and 'simulation_id' keys
+        dark_mode: Enable dark mode styling
+        metric: Which metric to display ('cagr', 'sharpe_ratio', 'max_drawdown', 'annual_volatility')
+
+    Returns:
+        Dash Bootstrap Table component with clickable cells
+    """
+    import dash_bootstrap_components as dbc
+    from dash import html
+    import numpy as np
+
+    theme = get_theme(dark_mode)
+    metric_cfg = METRIC_CONFIG.get(metric, METRIC_CONFIG['cagr'])
+    format_fn = metric_cfg['format_fn']
+    higher_is_better = metric_cfg.get('higher_is_better', True)
+
+    # First pass: collect all MC median values for global color scaling
+    all_mc_values = []
+    for portfolio_id in active_portfolios:
+        for sim_id in active_simulations:
+            key = f"{portfolio_id}|{sim_id}"
+            results = all_results.get(key)
+            if results:
+                # Handle both SimulationResults objects and dict format
+                if hasattr(results, 'monte_carlo') and results.monte_carlo:
+                    values = [getattr(r, metric) for r in results.monte_carlo]
+                    all_mc_values.append(np.median(values))
+                elif isinstance(results, dict) and results.get('mc_distributions'):
+                    values = results['mc_distributions'].get(metric, [])
+                    if values:
+                        all_mc_values.append(np.median(values))
+
+    # Global min/max for consistent color scaling
+    global_min = min(all_mc_values) if all_mc_values else 0
+    global_max = max(all_mc_values) if all_mc_values else 1
+
+    # Build header row: Portfolio | Historical | Simulation1 | Simulation2 | ...
+    header_style = {
+        'backgroundColor': theme['table_header_fill'],
+        'color': theme['table_header_font'],
+        'padding': '12px 16px',
+        'border': f"1px solid {theme['table_line_color']}",
+        'fontWeight': 'bold',
+        'textAlign': 'center',
+        'minWidth': '100px',
+    }
+    header_cells = [
+        html.Th("Portfolio", style={**header_style, 'minWidth': '120px'}),
+        html.Th("Historical", style=header_style),
+    ]
+    for sim_id in active_simulations:
+        header_cells.append(html.Th(
+            simulation_names.get(sim_id, sim_id),
+            style=header_style
+        ))
+    header = html.Thead(html.Tr(header_cells))
+
+    # Build data rows
+    rows = []
+    for portfolio_id in active_portfolios:
+        # Portfolio name cell
+        row_cells = [html.Td(
+            portfolio_names.get(portfolio_id, portfolio_id),
+            style={
+                'backgroundColor': theme['table_header_fill'],
+                'color': theme['table_header_font'],
+                'padding': '12px 16px',
+                'border': f"1px solid {theme['table_line_color']}",
+                'fontWeight': 'bold',
+                'textAlign': 'left',
+            }
+        )]
+
+        # Get historical value (same for all simulations, just grab from first)
+        hist_val = None
+        for sim_id in active_simulations:
+            key = f"{portfolio_id}|{sim_id}"
+            results = all_results.get(key)
+            if results:
+                if hasattr(results, 'historical') and results.historical:
+                    hist_val = getattr(results.historical, metric, None)
+                elif isinstance(results, dict) and results.get('historical'):
+                    hist_val = results['historical'].get(metric)
+                if hist_val is not None:
+                    break
+
+        hist_text = format_fn(hist_val) if hist_val is not None else "N/A"
+
+        # Historical value cell (not clickable, neutral background)
+        row_cells.append(html.Td(
+            hist_text,
+            style={
+                'backgroundColor': theme['table_cell_fill'],
+                'color': theme['table_cell_font'],
+                'padding': '12px 16px',
+                'border': f"1px solid {theme['table_line_color']}",
+                'fontWeight': 'bold',
+                'textAlign': 'center',
+            }
+        ))
+
+        # MC median cells for each simulation (clickable, color-coded)
+        for sim_id in active_simulations:
+            key = f"{portfolio_id}|{sim_id}"
+            results = all_results.get(key)
+
+            mc_median = None
+
+            # Extract MC median value
+            if results:
+                if hasattr(results, 'monte_carlo') and results.monte_carlo:
+                    values = [getattr(r, metric) for r in results.monte_carlo]
+                    mc_median = np.median(values)
+                elif isinstance(results, dict) and results.get('mc_distributions'):
+                    values = results['mc_distributions'].get(metric, [])
+                    if values:
+                        mc_median = np.median(values)
+
+            mc_text = format_fn(mc_median) if mc_median is not None else "N/A"
+
+            # Get background color based on MC median value (using global scaling)
+            if mc_median is not None:
+                bg_color = _get_color_for_value(mc_median, global_min, global_max, higher_is_better)
+            else:
+                bg_color = theme['table_cell_fill']
+
+            # Determine if this cell is selected
+            is_selected = (
+                selected_cell and
+                selected_cell.get('portfolio_id') == portfolio_id and
+                selected_cell.get('simulation_id') == sim_id
+            )
+
+            row_cells.append(html.Td(
+                dbc.Button(
+                    mc_text,
+                    id={'type': 'grid-cell-btn', 'portfolio': portfolio_id, 'simulation': sim_id},
+                    n_clicks=0,
+                    color='link',
+                    className='w-100 h-100',
+                    style={
+                        'color': theme['table_cell_font'],
+                        'fontWeight': 'bold' if is_selected else 'normal',
+                        'fontSize': '14px',
+                        'textDecoration': 'none',
+                        'padding': '8px 12px',
+                        'margin': '0',
+                        'display': 'block',
+                        'width': '100%',
+                    }
+                ),
+                style={
+                    'backgroundColor': bg_color,
+                    'border': f"3px solid {theme['primary_color']}" if is_selected else f"1px solid {theme['table_line_color']}",
+                    'padding': '0',
+                    'textAlign': 'center',
+                    'verticalAlign': 'middle',
+                }
+            ))
+
+        rows.append(html.Tr(row_cells))
+
+    body = html.Tbody(rows)
+
+    # Create table with styling
+    table = dbc.Table(
+        [header, body],
+        bordered=True,
+        hover=True,
+        responsive=True,
+        style={
+            'backgroundColor': theme['table_cell_fill'],
+            'marginBottom': '0',
+        }
+    )
+
+    return table
 
 
 def create_empty_figure(message: str = "No data", dark_mode: bool = False) -> go.Figure:

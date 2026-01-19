@@ -6,26 +6,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from monte_carlo import (
     HistoricalConfig,
     MonteCarloConfig,
+    RFSchedule,
     SimulationResults,
     run_all,
 )
 from constants import (
     DEFAULT_INITIAL_AMT,
     DEFAULT_MONTHLY_CF,
-    DEFAULT_MC_SIMULATIONS,
-    DEFAULT_MC_YEARS,
     DEFAULT_START_DATE,
 )
 from ..portfolios.registry import registry
+from ..simulations.registry import simulation_registry
 from .cache import results_cache
 
 
 def run_portfolio_analysis(
     portfolio_id: str,
+    simulation_id: str = "stable_market",
     initial_amt: float = DEFAULT_INITIAL_AMT,
     monthly_cf: float = DEFAULT_MONTHLY_CF,
-    num_simulations: int = DEFAULT_MC_SIMULATIONS,
-    num_years: int = DEFAULT_MC_YEARS,
     start_date: str = DEFAULT_START_DATE,
     use_cache: bool = True,
     seed: int = 42
@@ -34,27 +33,33 @@ def run_portfolio_analysis(
 
     Args:
         portfolio_id: ID of the portfolio from the registry
+        simulation_id: ID of the simulation preset from the registry
         initial_amt: Initial investment amount
         monthly_cf: Monthly cash flow contribution
-        num_simulations: Number of Monte Carlo simulations
-        num_years: Length of each simulation in years
         start_date: Start date for historical backtest
         use_cache: Whether to use cached results
         seed: Random seed for reproducibility
 
     Returns:
         SimulationResults with historical and monte_carlo results
+
+    Note:
+        num_simulations and num_years are now taken from the simulation definition.
     """
+    # Get simulation definition first to get num_simulations and num_years
+    simulation_def = simulation_registry.get(simulation_id)
+
     config = {
+        'simulation_id': simulation_id,
         'initial_amt': initial_amt,
         'monthly_cf': monthly_cf,
-        'num_simulations': num_simulations,
-        'num_years': num_years,
+        'num_simulations': simulation_def.num_simulations,
+        'num_years': simulation_def.num_years,
         'start_date': start_date,
         'seed': seed
     }
 
-    # Check cache
+    # Check cache (key includes both portfolio_id and simulation_id via config)
     if use_cache:
         cached = results_cache.get(portfolio_id, config)
         if cached is not None:
@@ -66,10 +71,13 @@ def run_portfolio_analysis(
     # Configure
     historical_config = HistoricalConfig(start_date=start_date)
     mc_config = MonteCarloConfig(
-        num_simulations=num_simulations,
-        num_days=252 * num_years,
+        num_simulations=simulation_def.num_simulations,
+        num_days=252 * simulation_def.num_years,
         tickers=portfolio_def.tickers,
-        seed=seed
+        seed=seed,
+        use_garch=simulation_def.use_garch,
+        use_erp=simulation_def.use_erp,
+        rf_schedule=simulation_def.rf_schedule
     )
 
     # Run
