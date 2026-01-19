@@ -276,19 +276,24 @@ def create_results_grid(
     format_fn = metric_cfg['format_fn']
     higher_is_better = metric_cfg.get('higher_is_better', True)
 
-    # Collect MC median values for color scaling
-    all_mc_values = []
+    # Collect all values (MC medians + historical) for color scaling
+    all_values = []
+    historical_values = {}
     for portfolio_id in active_portfolios:
+        hist_val = _extract_historical_value(all_results, active_simulations, portfolio_id, metric)
+        if hist_val is not None:
+            all_values.append(hist_val)
+            historical_values[portfolio_id] = hist_val
         for sim_id in active_simulations:
             key = f"{portfolio_id}|{sim_id}"
             results = all_results.get(key)
             if results:
                 mc_median = _extract_mc_median(results, metric)
                 if mc_median is not None:
-                    all_mc_values.append(mc_median)
+                    all_values.append(mc_median)
 
-    global_min = min(all_mc_values) if all_mc_values else 0
-    global_max = max(all_mc_values) if all_mc_values else 1
+    global_min = min(all_values) if all_values else 0
+    global_max = max(all_values) if all_values else 1
 
     # Build header
     header_style = {
@@ -323,11 +328,13 @@ def create_results_grid(
         )]
 
         # Historical value (same for all simulations)
-        hist_val = _extract_historical_value(all_results, active_simulations, portfolio_id, metric)
+        hist_val = historical_values.get(portfolio_id)
+        hist_bg_color = _get_color_for_value(hist_val, global_min, global_max, higher_is_better) \
+            if hist_val is not None else theme['table_cell_fill']
         row_cells.append(html.Td(
             format_fn(hist_val) if hist_val is not None else "N/A",
             style={
-                'backgroundColor': theme['table_cell_fill'],
+                'backgroundColor': hist_bg_color,
                 'color': theme['table_cell_font'],
                 'padding': '12px 16px',
                 'border': f"1px solid {theme['table_line_color']}",
