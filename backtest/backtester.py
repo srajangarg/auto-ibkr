@@ -173,43 +173,63 @@ class Backtester:
     DEFAULT_INITIAL_AMT = 10000
     DEFAULT_START_DATE = '2005-01-01'
 
-    def __init__(self, csv_path=DATA_FILE, initial_amt=DEFAULT_INITIAL_AMT, monthly_cf=0, start_date=DEFAULT_START_DATE, end_date=None):
+    def __init__(
+        self,
+        csv_path=DATA_FILE,
+        df=None,
+        initial_amt=DEFAULT_INITIAL_AMT,
+        monthly_cf=0,
+        start_date=DEFAULT_START_DATE,
+        end_date=None
+    ):
+        self.initial_amt = initial_amt
+        self.monthly_cf = monthly_cf
+
+        if df is not None:
+            self.df = self._load_from_dataframe(df)
+        else:
+            self.df = self._load_from_csv(csv_path, start_date, end_date)
+
+        self.actual_start = self.df.index.min()
+        self.actual_end = self.df.index.max()
+
+        self.rate_cols = RATE_COLS
+        self.return_cols = [c for c in self.df.columns if c not in self.rate_cols]
+
+        for col in self.return_cols:
+            self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+        self.df.fillna(0, inplace=True)
+
+    def _load_from_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load data from a provided DataFrame (e.g., from Monte Carlo)."""
+        result = df.copy()
+        if not isinstance(result.index, pd.DatetimeIndex):
+            if DATE_COL in result.columns:
+                result[DATE_COL] = pd.to_datetime(result[DATE_COL])
+                result.set_index(DATE_COL, inplace=True)
+        return result
+
+    def _load_from_csv(self, csv_path: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Load and filter data from CSV file."""
         if not os.path.exists(csv_path):
             from combine_data import combine_and_convert
             combine_and_convert()
 
-        print(f"Initializing Backtester with CSV path: {csv_path}")
-        self.initial_amt = initial_amt  
-        self.monthly_cf = monthly_cf
-        
-        self.df = pd.read_csv(csv_path)
-        self.df[DATE_COL] = pd.to_datetime(self.df[DATE_COL])
-        self.df.sort_values(DATE_COL, inplace=True)
-        
+        df = pd.read_csv(csv_path)
+        df[DATE_COL] = pd.to_datetime(df[DATE_COL])
+        df.sort_values(DATE_COL, inplace=True)
+
         if start_date:
-            self.df = self.df[self.df[DATE_COL] >= pd.to_datetime(start_date)]
+            df = df[df[DATE_COL] >= pd.to_datetime(start_date)]
         if end_date:
-            self.df = self.df[self.df[DATE_COL] <= pd.to_datetime(end_date)]
-            
-        if self.df.empty:
+            df = df[df[DATE_COL] <= pd.to_datetime(end_date)]
+
+        if df.empty:
             raise ValueError(f"No data found for the given date range: {start_date} to {end_date}")
-            
-        # Store the actual start and end dates used
-        self.actual_start = self.df[DATE_COL].min()
-        self.actual_end = self.df[DATE_COL].max()
-        
-        # Ensure we are working with a fresh copy to avoid SettingWithCopyWarning
-        self.df = self.df.copy()
-        self.df.set_index(DATE_COL, inplace=True)
-        
-        # Identify return columns (those not in risk-free rates)
-        self.rate_cols = RATE_COLS
-        self.return_cols = [c for c in self.df.columns if c not in self.rate_cols]
-        
-        # Ensure all return columns are numeric
-        for col in self.return_cols:
-            self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
-        self.df.fillna(0, inplace=True)
+
+        df = df.copy()
+        df.set_index(DATE_COL, inplace=True)
+        return df
 
     def run(self, portfolio: BasePortfolio):
         portfolio.total_contributions = self.initial_amt
