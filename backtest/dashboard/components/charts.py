@@ -101,7 +101,7 @@ METRIC_CONFIG = {
         'display_name': 'Max Drawdown',
         'format': '.1%',
         'format_fn': lambda x: f"{x*100:.2f}%",
-        'higher_is_better': False,  # Less negative is better
+        'higher_is_better': True,  # Less negative (closer to 0) is better, so higher values are better
     },
     'annual_volatility': {
         'display_name': 'Annual Volatility',
