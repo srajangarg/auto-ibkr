@@ -1,5 +1,14 @@
 """Dashboard layout definitions."""
-from dash import html, dcc
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from constants import (
+    DEFAULT_INITIAL_AMT,
+    DEFAULT_MONTHLY_CF,
+    DEFAULT_MC_SIMULATIONS,
+)
+from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
 from .portfolios import registry
 
@@ -13,8 +22,12 @@ def create_layout():
     return dbc.Container([
         # Store for active portfolios (persists client-side)
         dcc.Store(id='active-portfolios-store', data=[]),
+        # Store for all portfolio results (after running analysis)
+        dcc.Store(id='all-results-store', data={}),
+        # Store for selected portfolio (for viewing distributions)
+        dcc.Store(id='selected-portfolio-store', data=None),
 
-        # Header
+        # Header with dark mode toggle
         dbc.Row([
             dbc.Col([
                 html.H1("Backtest Dashboard", className="text-center my-4"),
@@ -22,7 +35,17 @@ def create_layout():
                     "Compare portfolio strategies with historical and Monte Carlo analysis",
                     className="text-center text-muted mb-4"
                 )
-            ])
+            ], md=10),
+            dbc.Col([
+                html.Div([
+                    dbc.Label("Dark Mode", className="me-2", style={"fontSize": "0.9rem"}),
+                    dbc.Switch(
+                        id='dark-mode-switch',
+                        value=True,  # Default to dark mode
+                        className="d-inline-block"
+                    )
+                ], className="d-flex align-items-center justify-content-end mt-4")
+            ], md=2)
         ]),
 
         # Portfolio Manager Section
@@ -58,53 +81,41 @@ def create_layout():
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Portfolio", className="fw-bold"),
-                        dcc.Dropdown(
-                            id='portfolio-dropdown',
-                            options=[],
-                            value=None,
-                            clearable=False,
-                            placeholder="Add portfolios above first...",
-                            className="mb-2"
-                        )
-                    ], md=3),
-
-                    dbc.Col([
                         html.Label("Initial Investment ($)", className="fw-bold"),
                         dbc.Input(
                             id='initial-amt-input',
                             type='number',
-                            value=10000,
+                            value=DEFAULT_INITIAL_AMT,
                             min=1000,
                             step=1000,
                             className="mb-2"
                         )
-                    ], md=2),
+                    ], md=3),
 
                     dbc.Col([
                         html.Label("Monthly Contribution ($)", className="fw-bold"),
                         dbc.Input(
                             id='monthly-cf-input',
                             type='number',
-                            value=0,
+                            value=DEFAULT_MONTHLY_CF,
                             min=0,
                             step=100,
                             className="mb-2"
                         )
-                    ], md=2),
+                    ], md=3),
 
                     dbc.Col([
                         html.Label("MC Simulations", className="fw-bold"),
                         dbc.Input(
                             id='mc-simulations-input',
                             type='number',
-                            value=500,
+                            value=DEFAULT_MC_SIMULATIONS,
                             min=100,
                             max=2000,
                             step=100,
                             className="mb-2"
                         )
-                    ], md=2),
+                    ], md=3),
 
                     dbc.Col([
                         html.Label("\u00A0", className="fw-bold"),  # Non-breaking space for alignment
@@ -114,7 +125,7 @@ def create_layout():
                             color='primary',
                             className='w-100'
                         )
-                    ], md=2)
+                    ], md=3)
                 ], align="end")
             ])
         ], className="mb-4"),
@@ -128,7 +139,54 @@ def create_layout():
                 dbc.Card([
                     dbc.CardHeader(html.H5("Summary Statistics", className="mb-0")),
                     dbc.CardBody([
-                        dcc.Graph(id='summary-table', config={'displayModeBar': False})
+                        html.P(
+                            "Click a row to view distribution charts for that portfolio.",
+                            className="text-muted small mb-3"
+                        ),
+                        dash_table.DataTable(
+                            id='summary-table',
+                            columns=[],
+                            data=[],
+                            row_selectable='single',
+                            selected_rows=[0],
+                            merge_duplicate_headers=True,  # Enables hierarchical column headers
+                            # Initial styling (will be updated by callback based on dark mode)
+                            style_header={
+                                'backgroundColor': '#1e293b',
+                                'color': '#f1f5f9',
+                                'fontWeight': 'bold',
+                                'textAlign': 'center',
+                                'border': '1px solid #334155',
+                                'fontFamily': 'Inter, -apple-system, sans-serif',
+                            },
+                            style_cell={
+                                'textAlign': 'center',
+                                'padding': '12px 10px',
+                                'fontSize': '13px',
+                                'border': '1px solid #334155',
+                                'fontFamily': 'Inter, -apple-system, sans-serif',
+                            },
+                            style_data={
+                                'backgroundColor': '#0f172a',
+                                'color': '#e2e8f0',
+                            },
+                            style_data_conditional=[
+                                {
+                                    'if': {'state': 'selected'},
+                                    'backgroundColor': '#164e63',
+                                    'border': '1px solid #22d3ee',
+                                },
+                                {
+                                    'if': {'state': 'active'},
+                                    'backgroundColor': '#164e63',
+                                    'border': '1px solid #22d3ee',
+                                },
+                            ],
+                            style_table={
+                                'overflowX': 'auto',
+                                'borderRadius': '8px',
+                            },
+                        )
                     ])
                 ], className="mb-4"),
 
@@ -137,7 +195,7 @@ def create_layout():
                     dbc.CardHeader(html.H5("Distribution Analysis", className="mb-0")),
                     dbc.CardBody([
                         html.P(
-                            "Red dashed line shows historical result. Histogram shows Monte Carlo distribution.",
+                            "Orange dashed line shows historical result. Histogram shows Monte Carlo distribution.",
                             className="text-muted small mb-3"
                         ),
                         dcc.Graph(id='distributions-grid')

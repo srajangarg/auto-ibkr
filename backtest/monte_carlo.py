@@ -3,6 +3,7 @@
 
 import pandas as pd
 import numpy as np
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from functools import lru_cache
@@ -389,6 +390,21 @@ def _get_cached_date_range(num_days: int) -> pd.DatetimeIndex:
     return _DATE_RANGE_CACHE[num_days]
 
 
+def _parse_leveraged_ticker(ticker: str) -> tuple:
+    """Parse a ticker to identify if it's leveraged.
+
+    Args:
+        ticker: Ticker symbol (e.g., 'QQQ', 'QQQx3', 'SOXXx2')
+
+    Returns:
+        tuple: (base_ticker, leverage_factor) or (ticker, 1) if not leveraged
+    """
+    match = re.match(r'^(.+)x(\d+)$', ticker)
+    if match:
+        return match.group(1), int(match.group(2))
+    return ticker, 1
+
+
 def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> pd.DataFrame:
     """Generate synthetic returns DataFrame.
 
@@ -396,6 +412,7 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
     - Simple GBM (constant volatility) or GARCH(1,1) volatility dynamics
     - Constant or time-varying risk-free rates
     - Equity risk premium modeling (ties equity returns to RF rate)
+    - Proper correlation between base and leveraged tickers (e.g., QQQ and QQQx3)
 
     Args:
         config: Monte Carlo configuration
@@ -413,13 +430,29 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
 
     # Generate RF rate path
     rf_path = generate_rf_path(config.rf_schedule, num_days)  # Annual rates
+    daily_rf = rf_path / TRADING_DAYS_PER_YEAR
 
-    # Build ticker parameters
+    # Identify base tickers and leveraged tickers
+    base_tickers = []
+    leveraged_tickers = {}  # {ticker: (base_ticker, leverage)}
+    for ticker in tickers:
+        base, leverage = _parse_leveraged_ticker(ticker)
+        if leverage > 1:
+            leveraged_tickers[ticker] = (base, leverage)
+            if base not in base_tickers and base not in tickers:
+                base_tickers.append(base)
+        else:
+            base_tickers.append(ticker)
+
+    # All tickers we need to generate returns for (base tickers only)
+    tickers_to_generate = list(set(base_tickers))
+
+    # Build ticker parameters for base tickers
     params = {}
     garch_params_all = {}
     erp_values = {}
 
-    for ticker in tickers:
+    for ticker in tickers_to_generate:
         # Standard params (mean, vol)
         if ticker in config.ticker_params:
             params[ticker] = config.ticker_params[ticker]
@@ -444,11 +477,11 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
     # Generate date index (cached to avoid repeated generation)
     dates = _get_cached_date_range(num_days)
 
-    # Generate returns for each ticker
+    # Generate returns for base tickers only
     data = {}
     garch_vols = {}  # Store GARCH volatilities for vol columns
 
-    for ticker in tickers:
+    for ticker in tickers_to_generate:
         sigma = params[ticker]['volatility']
 
         if config.use_garch and ticker in garch_params_all:
@@ -458,7 +491,6 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
             if config.use_erp:
                 # ERP: expected return = rf + erp (varies daily with RF)
                 erp = erp_values[ticker]
-                daily_rf = rf_path / TRADING_DAYS_PER_YEAR
                 mu_daily_base = erp / TRADING_DAYS_PER_YEAR
 
                 # Generate GARCH returns with base mu, then adjust for RF
@@ -496,7 +528,6 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
             if config.use_erp:
                 # ERP: expected return = rf + erp
                 erp = erp_values[ticker]
-                daily_rf = rf_path / TRADING_DAYS_PER_YEAR
                 mu_daily = erp / TRADING_DAYS_PER_YEAR + daily_rf
 
                 z = np.random.standard_normal(num_days)
@@ -511,14 +542,19 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
 
         data[ticker] = daily_returns
 
+    # Derive leveraged ticker returns from base tickers
+    # Leveraged return = leverage * base_return - (leverage - 1) * rf
+    # This models daily rebalancing with borrowing at risk-free rate
+    for ticker, (base, leverage) in leveraged_tickers.items():
+        base_returns = data[base]
+        data[ticker] = leverage * base_returns - (leverage - 1) * daily_rf
+
     # Create DataFrame
     df = pd.DataFrame(data, index=dates)
     df.index.name = DATE_COL
 
-    # Add volatility columns
-    base_tickers = [t for t in tickers if not any(x in t.lower() for x in ['x2', 'x3'])]
-
-    for ticker in base_tickers:
+    # Add volatility columns for base tickers
+    for ticker in tickers_to_generate:
         if config.use_garch and ticker in garch_vols:
             # Use GARCH conditional volatility
             df[f"{ticker}_rvol_garch"] = garch_vols[ticker]

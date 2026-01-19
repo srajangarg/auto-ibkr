@@ -9,15 +9,15 @@ from monte_carlo import (
     SimulationResults,
     run_all,
 )
+from constants import (
+    DEFAULT_INITIAL_AMT,
+    DEFAULT_MONTHLY_CF,
+    DEFAULT_MC_SIMULATIONS,
+    DEFAULT_MC_YEARS,
+    DEFAULT_START_DATE,
+)
 from ..portfolios.registry import registry
 from .cache import results_cache
-
-
-DEFAULT_INITIAL_AMT = 10000
-DEFAULT_MONTHLY_CF = 0
-DEFAULT_MC_SIMULATIONS = 500
-DEFAULT_MC_YEARS = 20
-DEFAULT_START_DATE = '2005-01-01'
 
 
 def run_portfolio_analysis(
