@@ -16,8 +16,11 @@ from constants import (
     STRATEGY_RETURN_COL,
     T_BILL_3M_COL,
     RATE_COLS,
-    SGOV_TICKER
+    SGOV_TICKER,
+    DEFAULT_IV_PREMIUM,
+    DEFAULT_OPTIONS_ALLOCATION
 )
+from options_pricing import black_scholes_call, OptionPosition, dte_to_years
 
 class BasePortfolio(ABC):
     def __init__(self):
@@ -173,6 +176,225 @@ class DynamicLeveragedPortfolio(BasePortfolio):
     def get_extra_history(self, row):
         return {'Leverage': self.current_leverage}
 
+
+class HybridOptionsPortfolio(BasePortfolio):
+    """
+    Hybrid portfolio combining equity positions with LEAPS (2-year call options).
+
+    Each monthly rebalance:
+    1. Sell all existing LEAPS at current BS value
+    2. Allocate (1 - options_allocation) to equity
+    3. Buy fresh 2Y LEAPS with remaining options_allocation budget
+    """
+    VOL_WINDOW = '1M'  # Fixed: use 1-month realized volatility
+    LEAPS_DTE = 504    # Fixed: 2 years of trading days
+    DEFAULT_VOL = 0.20  # Fallback volatility (20% annualized)
+    MIN_IV = 0.15       # Floor IV at 15% (LEAPS rarely trade below this)
+    MAX_IV = 2.0        # Cap IV at 200%
+
+    def __init__(self, ticker, options_allocation=DEFAULT_OPTIONS_ALLOCATION,
+                 moneyness=0.0, iv_premium=DEFAULT_IV_PREMIUM):
+        """
+        Args:
+            ticker: Base ticker (e.g., 'QQQ')
+            options_allocation: Fraction of portfolio in LEAPS (0.0 to 0.5)
+            moneyness: Strike as fraction from spot (0.0 = ATM, 0.1 = 10% OTM, -0.1 = 10% ITM)
+            iv_premium: Multiplier on realized vol for implied volatility
+        """
+        super().__init__()
+        self.ticker = ticker
+        self.options_allocation = options_allocation
+        self.moneyness = moneyness
+        self.iv_premium = iv_premium
+
+        # Normalized stock price tracking (BS is scale-invariant)
+        self.stock_price = 100.0
+        self.option_position = None  # OptionPosition or None
+        self.current_option_value = 0.0
+        self._initialized = False
+
+    def total_value(self):
+        """Total portfolio value = equity positions + options value."""
+        return sum(self.positions.values()) + self.current_option_value
+
+    def _get_vol(self, row) -> float:
+        """Get volatility from row, with fallback."""
+        vol_col = f"{self.ticker}_rvol_{self.VOL_WINDOW}"
+        vol = row.get(vol_col, 0)
+        if vol <= 0:
+            return self.DEFAULT_VOL
+        return vol
+
+    def _get_iv(self, row) -> float:
+        """Calculate implied volatility from realized vol."""
+        vol = self._get_vol(row)
+        iv = vol * self.iv_premium
+        # Floor at MIN_IV (LEAPS rarely trade below 15% IV), cap at MAX_IV
+        return max(self.MIN_IV, min(iv, self.MAX_IV))
+
+    def _get_rf_rate(self, row) -> float:
+        """Get risk-free rate from row."""
+        return row.get(T_BILL_3M_COL, 4.0) / 100.0  # Default 4% if missing
+
+    def _price_option(self, row) -> float:
+        """Price current option position using Black-Scholes."""
+        if self.option_position is None:
+            return 0.0
+
+        T = dte_to_years(self.option_position.current_dte)
+        if T <= 0:
+            # Expired: return intrinsic value
+            intrinsic = max(self.stock_price - self.option_position.strike, 0)
+            return intrinsic * self.option_position.quantity
+
+        iv = self._get_iv(row)
+        rf = self._get_rf_rate(row)
+
+        call_price = black_scholes_call(
+            S=self.stock_price,
+            K=self.option_position.strike,
+            T=T,
+            r=rf,
+            sigma=iv
+        )
+        return call_price * self.option_position.quantity
+
+    def _price_option_fast(self, vol: float, rf: float) -> float:
+        """Fast version - takes pre-extracted vol and rf values."""
+        if self.option_position is None:
+            return 0.0
+
+        T = dte_to_years(self.option_position.current_dte)
+        if T <= 0:
+            intrinsic = max(self.stock_price - self.option_position.strike, 0)
+            return intrinsic * self.option_position.quantity
+
+        # Calculate IV from pre-extracted vol
+        iv = vol * self.iv_premium if vol > 0 else self.DEFAULT_VOL * self.iv_premium
+        iv = max(self.MIN_IV, min(iv, self.MAX_IV))
+
+        call_price = black_scholes_call(
+            S=self.stock_price,
+            K=self.option_position.strike,
+            T=T,
+            r=rf,
+            sigma=iv
+        )
+        return call_price * self.option_position.quantity
+
+    def update_options_value(self, row):
+        """
+        Called daily by backtester to update options value.
+        Updates stock price from daily return, decrements DTE, reprices option.
+        """
+        # Update stock price from daily return
+        daily_return = row.get(self.ticker, 0)
+        self.stock_price *= (1 + daily_return)
+
+        # Decrement DTE if we have an option
+        if self.option_position is not None:
+            self.option_position.current_dte -= 1
+
+        # Reprice option
+        self.current_option_value = self._price_option(row)
+
+    def update_options_value_fast(self, daily_return: float, vol: float, rf: float):
+        """
+        Fast version - takes pre-extracted values instead of row dict.
+        Avoids pandas iloc overhead.
+        """
+        # Update stock price from daily return
+        self.stock_price *= (1 + daily_return)
+
+        # Decrement DTE if we have an option
+        if self.option_position is not None:
+            self.option_position.current_dte -= 1
+
+        # Reprice option using pre-extracted values
+        self.current_option_value = self._price_option_fast(vol, rf)
+
+    def rebalance(self, date, row, cash_to_add=0):
+        """
+        Monthly rebalance:
+        1. Value existing options at current BS price (sell)
+        2. Calculate total = equity + options_value + new_cash
+        3. Allocate (1 - options_allocation) to equity ticker
+        4. Buy new 2Y LEAPS with options_allocation budget
+        """
+        # Initialize stock price on first rebalance
+        if not self._initialized:
+            self.stock_price = 100.0
+            self._initialized = True
+
+        # Step 1: Calculate total portfolio value
+        # Options are "sold" at current value
+        options_value = self._price_option(row)
+        equity_value = sum(self.positions.values())
+        total = equity_value + options_value + cash_to_add
+
+        # Step 2: Allocate to equity
+        equity_allocation = total * (1 - self.options_allocation)
+        self.positions = {self.ticker: equity_allocation}
+
+        # Step 3: Buy new LEAPS
+        options_budget = total * self.options_allocation
+
+        if options_budget > 0:
+            # Calculate strike price
+            strike = self.stock_price * (1 + self.moneyness)
+
+            # Price a single option at 2Y DTE
+            T = dte_to_years(self.LEAPS_DTE)
+            iv = self._get_iv(row)
+            rf = self._get_rf_rate(row)
+
+            single_option_price = black_scholes_call(
+                S=self.stock_price,
+                K=strike,
+                T=T,
+                r=rf,
+                sigma=iv
+            )
+
+            if single_option_price > 0:
+                # Buy as many contracts as budget allows (fractional allowed)
+                quantity = options_budget / single_option_price
+                self.option_position = OptionPosition(
+                    strike=strike,
+                    initial_dte=self.LEAPS_DTE,
+                    current_dte=self.LEAPS_DTE,
+                    quantity=quantity
+                )
+                self.current_option_value = options_budget
+            else:
+                # Zero option price - move budget to equity
+                self.positions[self.ticker] += options_budget
+                self.option_position = None
+                self.current_option_value = 0.0
+        else:
+            self.option_position = None
+            self.current_option_value = 0.0
+
+    def get_extra_history(self, row):
+        """Record extra metrics for history."""
+        return self.get_extra_history_fast()
+
+    def get_extra_history_fast(self):
+        """Fast version - uses cached values, no row needed."""
+        option_value = self.current_option_value
+        equity_value = sum(self.positions.values())
+        total = equity_value + option_value
+
+        actual_options_pct = option_value / total if total > 0 else 0
+
+        return {
+            'Options_Value': option_value,
+            'Equity_Value': equity_value,
+            'Options_Pct': actual_options_pct,
+            'Stock_Price': self.stock_price
+        }
+
+
 class Backtester:
     DEFAULT_INITIAL_AMT = 10000
     DEFAULT_START_DATE = '2005-01-01'
@@ -274,6 +496,15 @@ class Backtester:
                 if asset in col_to_idx:
                     portfolio.positions[asset] *= (1 + row_data[col_to_idx[asset]])
 
+            # Update options value if portfolio has options (e.g., HybridOptionsPortfolio)
+            # Use cached row_data values instead of iloc for options portfolios
+            if hasattr(portfolio, 'update_options_value'):
+                daily_return = row_data[col_to_idx.get(portfolio.ticker, 0)] if portfolio.ticker in col_to_idx else 0
+                vol_col = f"{portfolio.ticker}_rvol_{portfolio.VOL_WINDOW}"
+                vol = row_data[col_to_idx[vol_col]] if vol_col in col_to_idx else 0
+                rf = row_data[col_to_idx[T_BILL_3M_COL]] / 100.0 if T_BILL_3M_COL in col_to_idx else 0.04
+                portfolio.update_options_value_fast(daily_return, vol, rf)
+
             total_val = portfolio.total_value()
 
             # Strategy return for the day
@@ -295,6 +526,9 @@ class Backtester:
             elif hasattr(portfolio, 'current_leverage'):
                 # For dynamic portfolios, record leverage without full row
                 snapshot['Leverage'] = portfolio.current_leverage
+            elif hasattr(portfolio, 'option_position'):
+                # For options portfolios, use cached values (no iloc needed)
+                snapshot.update(portfolio.get_extra_history_fast())
             portfolio.history.append(snapshot)
 
         return portfolio.get_history_df()
@@ -305,10 +539,11 @@ if __name__ == "__main__":
     
     # Define Portfolios to Compare
     portfolios = {
-        'QQQ': StaticPortfolio({'QQQ': 100}),      
+        'QQQ': StaticPortfolio({'QQQ': 100}),
         'QQQx2': StaticPortfolio({'QQQ': 50, 'QQQx3': 50}),
-        'QQQx3': StaticPortfolio({'QQQ': 0, 'QQQx3': 100}),      
         'QQQ_dyn_0.0_0.7': DynamicLeveragedPortfolio('QQQ', alpha=0.0, beta=0.7, target_return=0.12, vol_period='1M'),
+        'QQQ_LEAPS_20': HybridOptionsPortfolio('QQQ', options_allocation=0.20, moneyness=0.0),
+        'QQQ_LEAPS_30_OTM': HybridOptionsPortfolio('QQQ', options_allocation=0.30, moneyness=0.10),
     }
     
     all_metrics = {}

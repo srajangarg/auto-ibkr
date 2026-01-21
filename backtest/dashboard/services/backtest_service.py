@@ -1,6 +1,16 @@
 """Service layer for backtest and Monte Carlo simulations."""
 import sys
 import os
+import time
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from monte_carlo import (
@@ -63,10 +73,15 @@ def run_portfolio_analysis(
     if use_cache:
         cached = results_cache.get(portfolio_id, config)
         if cached is not None:
+            logger.info(f"Cache HIT: {portfolio_id} x {simulation_id}")
             return cached
 
     # Get portfolio definition
     portfolio_def = registry.get(portfolio_id)
+
+    logger.info(f"Running: {portfolio_def.display_name} x {simulation_def.display_name} "
+                f"({simulation_def.num_simulations} sims, {simulation_def.num_years}y)")
+    start_time = time.time()
 
     # Configure
     historical_config = HistoricalConfig(start_date=start_date)
@@ -77,7 +92,8 @@ def run_portfolio_analysis(
         seed=seed,
         use_garch=simulation_def.use_garch,
         use_erp=simulation_def.use_erp,
-        rf_schedule=simulation_def.rf_schedule
+        rf_schedule=simulation_def.rf_schedule,
+        crash_config=simulation_def.crash_config
     )
 
     # Run
@@ -89,6 +105,9 @@ def run_portfolio_analysis(
         monthly_cf=monthly_cf,
         verbose=False  # Don't print to console in web app
     )
+
+    elapsed = time.time() - start_time
+    logger.info(f"Completed: {portfolio_def.display_name} x {simulation_def.display_name} in {elapsed:.1f}s")
 
     # Cache and return
     if use_cache:

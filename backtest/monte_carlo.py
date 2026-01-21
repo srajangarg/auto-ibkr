@@ -153,6 +153,27 @@ class RFSchedule:
     midpoint_rate: Optional[float] = None
 
 
+@dataclass
+class CrashConfig:
+    """Configuration for crash injection in Monte Carlo simulations.
+
+    When enabled, a percentage of simulations will experience a market crash
+    (30-50% decline) within the crash window, followed by recovery at normal pace.
+
+    Attributes:
+        crash_probability: Fraction of simulations that will have a crash (0.0 to 1.0)
+        crash_window_days: Window in which crash can start (default: 504 = 2 years)
+        min_decline: Minimum decline magnitude (default: 0.30 = 30%)
+        max_decline: Maximum decline magnitude (default: 0.50 = 50%)
+        crash_duration_days: How many days the crash decline lasts (default: 40)
+    """
+    crash_probability: float = 0.0
+    crash_window_days: int = 504  # 2 years of trading days
+    min_decline: float = 0.30
+    max_decline: float = 0.50
+    crash_duration_days: int = 40
+
+
 def generate_rf_path(schedule: RFSchedule, num_days: int) -> np.ndarray:
     """Generate daily risk-free rates following the schedule.
 
@@ -190,6 +211,53 @@ def generate_rf_path(schedule: RFSchedule, num_days: int) -> np.ndarray:
 
     else:
         raise ValueError(f"Unknown schedule_type: {schedule.schedule_type}")
+
+
+def inject_crash(
+    returns: np.ndarray,
+    crash_config: CrashConfig,
+    seed: Optional[int] = None,
+    warmup_days: int = 0
+) -> np.ndarray:
+    """Inject a crash event into returns array.
+
+    The crash is modeled as a sharp decline over crash_duration_days,
+    distributed across all days in the crash period to achieve the target decline.
+
+    Args:
+        returns: Daily returns array
+        crash_config: Crash configuration
+        seed: Random seed for crash timing and magnitude
+        warmup_days: Number of warmup days at the start (crash window starts after)
+
+    Returns:
+        Modified returns array with crash injected
+    """
+    if seed is not None:
+        rng = np.random.RandomState(seed)
+    else:
+        rng = np.random.RandomState()
+
+    # Random crash start day within the window (after warmup)
+    max_crash_start = min(
+        warmup_days + crash_config.crash_window_days,
+        len(returns) - crash_config.crash_duration_days
+    )
+    crash_start = rng.randint(warmup_days, max_crash_start)
+
+    # Random decline magnitude between min and max
+    decline = rng.uniform(crash_config.min_decline, crash_config.max_decline)
+
+    # Calculate daily return needed to achieve total decline over crash duration
+    # If we want -40% total: (1 + r)^n = 0.6, so r = 0.6^(1/n) - 1
+    target_multiplier = 1 - decline
+    daily_crash_return = target_multiplier ** (1 / crash_config.crash_duration_days) - 1
+
+    # Replace returns during crash period
+    crash_end = crash_start + crash_config.crash_duration_days
+    returns[crash_start:crash_end] = daily_crash_return
+
+    return returns
 
 
 @lru_cache(maxsize=128)
@@ -364,6 +432,7 @@ class MonteCarloConfig:
         use_erp: If True, equity returns = rf + equity_risk_premium (ties returns to rf)
         ticker_erp: Override ERP per ticker {ticker: erp_value}
         historical_start_date: Start date for deriving params from historical data (default: '2005-01-01')
+        crash_config: Optional crash injection configuration
     """
     num_simulations: int = 1000
     num_days: int = 252 * 20  # 20 years
@@ -376,6 +445,7 @@ class MonteCarloConfig:
     use_erp: bool = False
     ticker_erp: dict = field(default_factory=dict)
     historical_start_date: str = '2005-01-01'
+    crash_config: Optional[CrashConfig] = None
 
 
 @dataclass
@@ -450,7 +520,11 @@ def _parse_leveraged_ticker(ticker: str) -> tuple:
     return ticker, 1
 
 
-def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> pd.DataFrame:
+def generate_monte_carlo_df(
+    config: MonteCarloConfig,
+    seed_offset: int = 0,
+    inject_crash_event: bool = False
+) -> pd.DataFrame:
     """Generate synthetic returns DataFrame.
 
     Supports:
@@ -458,10 +532,12 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
     - Constant or time-varying risk-free rates
     - Equity risk premium modeling (ties equity returns to RF rate)
     - Proper correlation between base and leveraged tickers (e.g., QQQ and QQQx3)
+    - Crash event injection (bubble/crash scenarios)
 
     Args:
         config: Monte Carlo configuration
         seed_offset: Offset added to seed for different simulations
+        inject_crash_event: If True and crash_config is set, inject a crash event
 
     Returns:
         DataFrame with simulated daily returns, same structure as historical data
@@ -595,6 +671,17 @@ def generate_monte_carlo_df(config: MonteCarloConfig, seed_offset: int = 0) -> p
 
         data[ticker] = daily_returns
 
+    # Inject crash events if configured
+    if inject_crash_event and config.crash_config is not None:
+        crash_seed = seed + 999999 if seed else None
+        for ticker in tickers_to_generate:
+            data[ticker] = inject_crash(
+                data[ticker],
+                config.crash_config,
+                seed=crash_seed,
+                warmup_days=warmup_days
+            )
+
     # Derive leveraged ticker returns from base tickers
     # Leveraged return = leverage * base_return - (leverage - 1) * rf
     # This models daily rebalancing with borrowing at risk-free rate
@@ -672,12 +759,46 @@ def run_backtest(
     )
 
 
+def _run_single_mc_simulation(
+    config: MonteCarloConfig,
+    portfolio_factory: Callable,
+    initial_amt: float,
+    monthly_cf: float,
+    seed_offset: int
+) -> BacktestResult:
+    """Run a single MC simulation. Designed for parallel execution."""
+    # Determine if this simulation should have a crash
+    inject_crash_event = False
+    if config.crash_config is not None and config.crash_config.crash_probability > 0:
+        # Use seed_offset to deterministically decide if this sim has a crash
+        rng = np.random.RandomState((config.seed or 0) + seed_offset + 123456)
+        inject_crash_event = rng.random() < config.crash_config.crash_probability
+
+    df = generate_monte_carlo_df(config, seed_offset=seed_offset, inject_crash_event=inject_crash_event)
+    bt = Backtester(df=df, initial_amt=initial_amt, monthly_cf=monthly_cf)
+    portfolio = portfolio_factory()
+    bt.run(portfolio)
+    metrics = portfolio.calculate_metrics()
+
+    return BacktestResult(
+        total_value=metrics[TOTAL_VALUE_COL],
+        total_contributions=metrics['Total Contributions'],
+        cagr=metrics['CAGR'],
+        max_drawdown=metrics['Max Drawdown'],
+        annual_volatility=metrics['Annual Volatility'],
+        sharpe_ratio=metrics['Sharpe Ratio'],
+        history_df=None
+    )
+
+
 def run_monte_carlo(
     config: MonteCarloConfig,
     portfolio_factory: Callable,
     initial_amt: float = 10000,
     monthly_cf: float = 0,
-    verbose: bool = True
+    verbose: bool = True,
+    parallel: bool = True,
+    max_workers: Optional[int] = None
 ) -> list:
     """Run multiple Monte Carlo simulations.
 
@@ -687,33 +808,50 @@ def run_monte_carlo(
         initial_amt: Initial investment amount
         monthly_cf: Monthly cash flow
         verbose: Print progress
+        parallel: Use parallel processing with threads (default True)
+        max_workers: Max worker threads (default: min(32, CPU count + 4))
 
     Returns:
         List of BacktestResult, one per simulation
     """
-    results = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import multiprocessing
 
-    for i in range(config.num_simulations):
-        if verbose and (i + 1) % 100 == 0:
-            print(f"  Running simulation {i + 1}/{config.num_simulations}")
+    if max_workers is None:
+        # ThreadPoolExecutor default is min(32, cpu_count + 4)
+        max_workers = min(32, multiprocessing.cpu_count() + 4, config.num_simulations)
 
-        df = generate_monte_carlo_df(config, seed_offset=i)
-        bt = Backtester(df=df, initial_amt=initial_amt, monthly_cf=monthly_cf)
-        portfolio = portfolio_factory()
-        bt.run(portfolio)
-        metrics = portfolio.calculate_metrics()
+    if parallel and config.num_simulations > 1:
+        # Parallel execution with threads (works with lambdas, numpy releases GIL)
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _run_single_mc_simulation,
+                    config, portfolio_factory, initial_amt, monthly_cf, i
+                ): i
+                for i in range(config.num_simulations)
+            }
 
-        results.append(BacktestResult(
-            total_value=metrics[TOTAL_VALUE_COL],
-            total_contributions=metrics['Total Contributions'],
-            cagr=metrics['CAGR'],
-            max_drawdown=metrics['Max Drawdown'],
-            annual_volatility=metrics['Annual Volatility'],
-            sharpe_ratio=metrics['Sharpe Ratio'],
-            history_df=None  # Don't store to save memory
-        ))
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                if verbose and completed % 100 == 0:
+                    print(f"  Completed {completed}/{config.num_simulations} simulations")
+                results.append(future.result())
 
-    return results
+        return results
+    else:
+        # Sequential execution (fallback)
+        results = []
+        for i in range(config.num_simulations):
+            if verbose and (i + 1) % 100 == 0:
+                print(f"  Running simulation {i + 1}/{config.num_simulations}")
+            results.append(_run_single_mc_simulation(
+                config, portfolio_factory, initial_amt, monthly_cf, i
+            ))
+
+        return results
 
 
 def run_all(

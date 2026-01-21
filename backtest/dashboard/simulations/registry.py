@@ -5,7 +5,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from monte_carlo import RFSchedule
+from monte_carlo import RFSchedule, CrashConfig
 from constants import DEFAULT_MC_SIMULATIONS, DEFAULT_MC_YEARS
 from ..registry_base import BaseRegistry
 
@@ -24,6 +24,7 @@ class SimulationDefinition:
         num_simulations: Number of Monte Carlo simulations to run
         num_years: Length of each simulation in years
         category: Category for grouping in UI
+        crash_config: Optional crash injection configuration
     """
     id: str
     display_name: str
@@ -34,6 +35,7 @@ class SimulationDefinition:
     num_simulations: int = DEFAULT_MC_SIMULATIONS
     num_years: int = DEFAULT_MC_YEARS
     category: str = "default"
+    crash_config: Optional[CrashConfig] = None
 
 
 # Global registry instance

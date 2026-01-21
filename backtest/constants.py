@@ -38,3 +38,8 @@ DEFAULT_START_DATE = '2005-01-01'
 
 # Cache Configuration
 CACHE_DIR = os.path.join(BASE_DIR, 'data', 'cache')
+
+# Options Strategy Defaults
+DEFAULT_IV_PREMIUM = 1.2
+DEFAULT_IV_SKEW = -0.15  # Typical equity skew (OTM puts more expensive)
+DEFAULT_OPTIONS_ALLOCATION = 0.20

@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from backtester import StaticPortfolio, DynamicLeveragedPortfolio
+from backtester import StaticPortfolio, DynamicLeveragedPortfolio, HybridOptionsPortfolio
 from .registry import PortfolioDefinition, registry
 
 
@@ -49,3 +49,31 @@ registry.register(PortfolioDefinition(
     tickers=['QQQ', 'QQQx3'],
     category="dynamic"
 ))
+
+# LEAPS Portfolios: (10%, 20%) allocations × (-20%, 0%, 20%) moneyness
+LEAPS_ALLOCATIONS = [0.10, 0.20]
+LEAPS_MONEYNESS = [-0.20, 0.0, 0.20]
+
+def _moneyness_label(m: float) -> str:
+    """Convert moneyness to human-readable label."""
+    if m == 0:
+        return "ATM"
+    elif m > 0:
+        return f"{int(m*100)}% OTM"
+    else:
+        return f"{int(abs(m)*100)}% ITM"
+
+for alloc in LEAPS_ALLOCATIONS:
+    for moneyness in LEAPS_MONEYNESS:
+        alloc_pct = int(alloc * 100)
+        moneyness_label = _moneyness_label(moneyness)
+        moneyness_id = f"{'itm' if moneyness < 0 else 'otm' if moneyness > 0 else 'atm'}{abs(int(moneyness*100)) if moneyness != 0 else ''}"
+
+        registry.register(PortfolioDefinition(
+            id=f"qqq_leaps_{alloc_pct}_{moneyness_id}",
+            display_name=f"QQQ + {alloc_pct}% {moneyness_label} LEAPS",
+            description=f"{100-alloc_pct}% QQQ + {alloc_pct}% 2Y {moneyness_label} LEAPS (monthly roll)",
+            factory=(lambda a=alloc, m=moneyness: HybridOptionsPortfolio('QQQ', options_allocation=a, moneyness=m)),
+            tickers=['QQQ'],
+            category="options"
+        ))

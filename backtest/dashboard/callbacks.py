@@ -1,6 +1,10 @@
 """Dash callbacks for dashboard interactivity."""
 import sys
 import os
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from constants import (
@@ -203,19 +207,41 @@ def register_callbacks(app):
             return {}, None, msg, msg, msg, msg, empty
 
         try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
             all_results = {}
             portfolio_names = {pid: registry.get(pid).display_name for pid in active_portfolios}
             simulation_names = {sid: simulation_registry.get(sid).display_name for sid in active_simulations}
 
-            for portfolio_id in active_portfolios:
-                for simulation_id in active_simulations:
-                    key = f"{portfolio_id}|{simulation_id}"
-                    all_results[key] = run_portfolio_analysis(
-                        portfolio_id=portfolio_id,
-                        simulation_id=simulation_id,
-                        initial_amt=initial_amt or DEFAULT_INITIAL_AMT,
-                        monthly_cf=monthly_cf or DEFAULT_MONTHLY_CF,
-                    )
+            # Build list of (portfolio_id, simulation_id) combinations
+            combos = [
+                (pid, sid)
+                for pid in active_portfolios
+                for sid in active_simulations
+            ]
+
+            logger.info(f"=== Run Analysis: {len(active_portfolios)} portfolios x {len(active_simulations)} simulations = {len(combos)} combinations ===")
+            start_time = time.time()
+
+            # Run combinations in parallel
+            def run_combo(args):
+                pid, sid = args
+                return (f"{pid}|{sid}", run_portfolio_analysis(
+                    portfolio_id=pid,
+                    simulation_id=sid,
+                    initial_amt=initial_amt or DEFAULT_INITIAL_AMT,
+                    monthly_cf=monthly_cf or DEFAULT_MONTHLY_CF,
+                ))
+
+            with ThreadPoolExecutor(max_workers=min(8, len(combos))) as executor:
+                futures = {executor.submit(run_combo, combo): combo for combo in combos}
+                for future in as_completed(futures):
+                    key, result = future.result()
+                    all_results[key] = result
+
+            total_elapsed = time.time() - start_time
+            logger.info(f"=== Analysis complete: {len(combos)} combinations in {total_elapsed:.1f}s ===")
+            logger.info("")
 
             # Select first cell by default
             selected_cells = [{'portfolio_id': active_portfolios[0], 'simulation_id': active_simulations[0]}]
