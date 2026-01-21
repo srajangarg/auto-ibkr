@@ -96,21 +96,25 @@ def create_layout():
                         dbc.Row([
                             dbc.Col([
                                 html.H6("CAGR", className="text-center mb-2"),
-                                html.Div(id='results-grid-cagr', children=_empty_grid_message())
+                                html.Div(id='results-grid-cagr', children=_empty_grid_message(),
+                                         style={'overflow': 'hidden'})
                             ], md=6, className="mb-3"),
                             dbc.Col([
                                 html.H6("Sharpe Ratio", className="text-center mb-2"),
-                                html.Div(id='results-grid-sharpe', children=_empty_grid_message())
+                                html.Div(id='results-grid-sharpe', children=_empty_grid_message(),
+                                         style={'overflow': 'hidden'})
                             ], md=6, className="mb-3"),
                         ]),
                         dbc.Row([
                             dbc.Col([
                                 html.H6("Max Drawdown", className="text-center mb-2"),
-                                html.Div(id='results-grid-drawdown', children=_empty_grid_message())
+                                html.Div(id='results-grid-drawdown', children=_empty_grid_message(),
+                                         style={'overflow': 'hidden'})
                             ], md=6, className="mb-3"),
                             dbc.Col([
                                 html.H6("Volatility", className="text-center mb-2"),
-                                html.Div(id='results-grid-volatility', children=_empty_grid_message())
+                                html.Div(id='results-grid-volatility', children=_empty_grid_message(),
+                                         style={'overflow': 'hidden'})
                             ], md=6, className="mb-3"),
                         ])
                     ])

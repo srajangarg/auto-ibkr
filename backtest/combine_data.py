@@ -57,7 +57,14 @@ def combine_and_convert():
         for label, window in VOLATILITY_WINDOWS.items():
             col_name = f"{ticker}_rvol_{label}"
             # Annualized Realized Volatility = std dev of daily returns * sqrt(TRADING_DAYS_PER_YEAR)
-            daily_returns_df[col_name] = daily_returns_df[ticker].rolling(window=window).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+            # Shift by 1 to avoid lookahead bias: vol on day i should only use returns through day i-1
+            daily_returns_df[col_name] = (
+                daily_returns_df[ticker]
+                .rolling(window=window)
+                .std()
+                .shift(1)  # Prevent lookahead: use yesterday's vol for today's decisions
+                * np.sqrt(TRADING_DAYS_PER_YEAR)
+            )
 
     # Combine the dataframes
     combined_df = rates_df.join(daily_returns_df, how='inner')

@@ -121,7 +121,8 @@ def _apply_theme(fig: go.Figure, dark_mode: bool) -> None:
 def create_metrics_grid(results: SimulationResults, dark_mode: bool = False) -> go.Figure:
     """Create 2x2 grid of distribution charts for key metrics."""
     theme = get_theme(dark_mode)
-    metrics = ['cagr', 'max_drawdown', 'sharpe_ratio', 'annual_volatility']
+    # Order matches results grid: Row 1 = CAGR, Sharpe; Row 2 = Drawdown, Volatility
+    metrics = ['cagr', 'sharpe_ratio', 'max_drawdown', 'annual_volatility']
     titles = [METRIC_CONFIG[m]['display_name'] for m in metrics]
 
     fig = make_subplots(
@@ -169,7 +170,8 @@ def create_metrics_grid(results: SimulationResults, dark_mode: bool = False) -> 
 def create_multi_metrics_grid(results_list: list, dark_mode: bool = False) -> go.Figure:
     """Create 2x2 grid of overlaid distribution charts for multiple portfolios."""
     theme = get_theme(dark_mode)
-    metrics = ['cagr', 'max_drawdown', 'sharpe_ratio', 'annual_volatility']
+    # Order matches results grid: Row 1 = CAGR, Sharpe; Row 2 = Drawdown, Volatility
+    metrics = ['cagr', 'sharpe_ratio', 'max_drawdown', 'annual_volatility']
     titles = [METRIC_CONFIG[m]['display_name'] for m in metrics]
 
     fig = make_subplots(
@@ -253,7 +255,7 @@ def _get_color_for_value(value: float, min_val: float, max_val: float, higher_is
     if not higher_is_better:
         normalized = 1 - normalized
 
-    opacity = 0.1 + (normalized * 0.5)
+    opacity = normalized * 0.8
     return f'rgba(34, 197, 94, {opacity:.2f})'
 
 
@@ -295,18 +297,26 @@ def create_results_grid(
     global_min = min(all_values) if all_values else 0
     global_max = max(all_values) if all_values else 1
 
+    # Calculate column count for width distribution
+    num_cols = 2 + len(active_simulations)  # Portfolio + Historical + simulations
+    col_width = f"{100 / num_cols:.1f}%"
+
     # Build header
     header_style = {
         'backgroundColor': theme['table_header_fill'],
         'color': theme['table_header_font'],
-        'padding': '12px 16px',
+        'padding': '6px 8px',
         'border': f"1px solid {theme['table_line_color']}",
         'fontWeight': 'bold',
         'textAlign': 'center',
-        'minWidth': '100px',
+        'width': col_width,
+        'fontSize': '12px',
+        'whiteSpace': 'nowrap',
+        'overflow': 'hidden',
+        'textOverflow': 'ellipsis',
     }
     header_cells = [
-        html.Th("Portfolio", style={**header_style, 'minWidth': '120px'}),
+        html.Th("Portfolio", style={**header_style, 'textAlign': 'left'}),
         html.Th("Historical", style=header_style),
     ]
     for sim_id in active_simulations:
@@ -320,10 +330,15 @@ def create_results_grid(
             style={
                 'backgroundColor': theme['table_header_fill'],
                 'color': theme['table_header_font'],
-                'padding': '12px 16px',
+                'padding': '6px 8px',
                 'border': f"1px solid {theme['table_line_color']}",
                 'fontWeight': 'bold',
                 'textAlign': 'left',
+                'width': col_width,
+                'fontSize': '12px',
+                'whiteSpace': 'nowrap',
+                'overflow': 'hidden',
+                'textOverflow': 'ellipsis',
             }
         )]
 
@@ -336,10 +351,12 @@ def create_results_grid(
             style={
                 'backgroundColor': hist_bg_color,
                 'color': theme['table_cell_font'],
-                'padding': '12px 16px',
+                'padding': '6px 8px',
                 'border': f"1px solid {theme['table_line_color']}",
                 'fontWeight': 'bold',
                 'textAlign': 'center',
+                'width': col_width,
+                'fontSize': '12px',
             }
         ))
 
@@ -365,9 +382,9 @@ def create_results_grid(
                     style={
                         'color': theme['table_cell_font'],
                         'fontWeight': 'bold' if is_selected else 'normal',
-                        'fontSize': '14px',
+                        'fontSize': '12px',
                         'textDecoration': 'none',
-                        'padding': '8px 12px',
+                        'padding': '4px 6px',
                         'margin': '0',
                         'display': 'block',
                         'width': '100%',
@@ -379,6 +396,7 @@ def create_results_grid(
                     'padding': '0',
                     'textAlign': 'center',
                     'verticalAlign': 'middle',
+                    'width': col_width,
                 }
             ))
 
@@ -386,8 +404,13 @@ def create_results_grid(
 
     return dbc.Table(
         [html.Thead(html.Tr(header_cells)), html.Tbody(rows)],
-        bordered=True, hover=True, responsive=True,
-        style={'backgroundColor': theme['table_cell_fill'], 'marginBottom': '0'}
+        bordered=True, hover=True, responsive=False,
+        style={
+            'backgroundColor': theme['table_cell_fill'],
+            'marginBottom': '0',
+            'tableLayout': 'fixed',
+            'width': '100%',
+        }
     )
 
 

@@ -162,16 +162,20 @@ class CrashConfig:
 
     Attributes:
         crash_probability: Fraction of simulations that will have a crash (0.0 to 1.0)
-        crash_window_days: Window in which crash can start (default: 504 = 2 years)
+        min_crash_start_days: Earliest day crash can start (default: 252 = 1 year)
+        max_crash_start_days: Latest day crash can start (default: 630 = 2.5 years)
         min_decline: Minimum decline magnitude (default: 0.30 = 30%)
         max_decline: Maximum decline magnitude (default: 0.50 = 50%)
-        crash_duration_days: How many days the crash decline lasts (default: 40)
+        min_crash_duration_days: Minimum crash duration (default: 20)
+        max_crash_duration_days: Maximum crash duration (default: 40)
     """
     crash_probability: float = 0.0
-    crash_window_days: int = 504  # 2 years of trading days
+    min_crash_start_days: int = 252   # 1 year
+    max_crash_start_days: int = 630   # 2.5 years
     min_decline: float = 0.30
     max_decline: float = 0.50
-    crash_duration_days: int = 40
+    min_crash_duration_days: int = 20
+    max_crash_duration_days: int = 40
 
 
 def generate_rf_path(schedule: RFSchedule, num_days: int) -> np.ndarray:
@@ -218,32 +222,45 @@ def inject_crash(
     crash_config: CrashConfig,
     seed: Optional[int] = None,
     warmup_days: int = 0
-) -> np.ndarray:
+) -> tuple[np.ndarray, int, int]:
     """Inject a crash event into returns array.
 
-    The crash is modeled as a sharp decline over crash_duration_days,
+    The crash is modeled as a sharp decline over a random duration,
     distributed across all days in the crash period to achieve the target decline.
 
     Args:
         returns: Daily returns array
         crash_config: Crash configuration
         seed: Random seed for crash timing and magnitude
-        warmup_days: Number of warmup days at the start (crash window starts after)
+        warmup_days: Number of warmup days at the start (crash indices are relative to full array)
 
     Returns:
-        Modified returns array with crash injected
+        Tuple of (modified returns array, crash_start_idx, crash_end_idx)
     """
     if seed is not None:
         rng = np.random.RandomState(seed)
     else:
         rng = np.random.RandomState()
 
-    # Random crash start day within the window (after warmup)
-    max_crash_start = min(
-        warmup_days + crash_config.crash_window_days,
-        len(returns) - crash_config.crash_duration_days
+    # Random crash duration between min and max
+    crash_duration = rng.randint(
+        crash_config.min_crash_duration_days,
+        crash_config.max_crash_duration_days + 1
     )
-    crash_start = rng.randint(warmup_days, max_crash_start)
+
+    # Crash start window (indices relative to full array including warmup)
+    min_start = warmup_days + crash_config.min_crash_start_days
+    max_start = min(
+        warmup_days + crash_config.max_crash_start_days,
+        len(returns) - crash_duration
+    )
+
+    if min_start >= max_start:
+        # Not enough room for crash, use what we can
+        min_start = warmup_days
+        max_start = max(min_start + 1, len(returns) - crash_duration)
+
+    crash_start = rng.randint(min_start, max_start)
 
     # Random decline magnitude between min and max
     decline = rng.uniform(crash_config.min_decline, crash_config.max_decline)
@@ -251,13 +268,13 @@ def inject_crash(
     # Calculate daily return needed to achieve total decline over crash duration
     # If we want -40% total: (1 + r)^n = 0.6, so r = 0.6^(1/n) - 1
     target_multiplier = 1 - decline
-    daily_crash_return = target_multiplier ** (1 / crash_config.crash_duration_days) - 1
+    daily_crash_return = target_multiplier ** (1 / crash_duration) - 1
 
     # Replace returns during crash period
-    crash_end = crash_start + crash_config.crash_duration_days
+    crash_end = crash_start + crash_duration
     returns[crash_start:crash_end] = daily_crash_return
 
-    return returns
+    return returns, crash_start, crash_end
 
 
 @lru_cache(maxsize=128)
@@ -370,6 +387,45 @@ def generate_garch_returns(
     annualized_vols = np.sqrt(variances * TRADING_DAYS_PER_YEAR)
 
     return returns, annualized_vols
+
+
+def recalculate_garch_variances(
+    returns: np.ndarray,
+    mu: float,
+    omega: float,
+    alpha: float,
+    beta: float,
+    initial_var: float
+) -> np.ndarray:
+    """Recalculate GARCH(1,1) conditional variances given a returns path.
+
+    This is used after crash injection to properly update volatility
+    based on the actual returns (including crash).
+
+    Args:
+        returns: Daily returns array (already includes crash if injected)
+        mu: Daily mean return (as decimal)
+        omega: GARCH constant term (daily variance units)
+        alpha: GARCH news/shock coefficient
+        beta: GARCH persistence coefficient
+        initial_var: Initial variance (daily)
+
+    Returns:
+        Array of annualized volatilities
+    """
+    num_days = len(returns)
+    variances = np.zeros(num_days)
+
+    # Initialize
+    variances[0] = initial_var
+
+    # Recalculate variances based on actual returns
+    for t in range(1, num_days):
+        variances[t] = omega + alpha * (returns[t-1] - mu)**2 + beta * variances[t-1]
+        variances[t] = max(variances[t], 1e-10)
+
+    # Annualize volatilities
+    return np.sqrt(variances * TRADING_DAYS_PER_YEAR)
 
 
 @lru_cache(maxsize=128)
@@ -620,20 +676,24 @@ def generate_monte_carlo_df(
             if config.use_erp:
                 # ERP: expected return = rf + erp (varies daily with RF)
                 erp = erp_values[ticker]
-                mu_daily_base = erp / TRADING_DAYS_PER_YEAR
+                # Use mean RF for GARCH mu so variance calculation is correct
+                # (GARCH variance depends on deviations from mu, so mu must match actual returns)
+                mean_rf = np.mean(daily_rf)
+                mu_daily_total = erp / TRADING_DAYS_PER_YEAR + mean_rf
 
-                # Generate GARCH returns with base mu, then adjust for RF
+                # Generate GARCH returns with total expected return (ERP + mean RF)
                 base_returns, vols = generate_garch_returns(
                     num_days=total_days,
-                    mu=mu_daily_base,  # Just the ERP component
+                    mu=mu_daily_total,
                     omega=gp['omega'],
                     alpha=gp['alpha'],
                     beta=gp['beta'],
                     initial_var=gp['long_run_var'],
                     seed=seed + hash(ticker) % 10000 if seed else None
                 )
-                # Add daily RF to get total return
-                daily_returns = base_returns + daily_rf
+                # Adjust returns to have time-varying RF instead of constant mean RF
+                # This preserves correct variance while allowing RF to vary over time
+                daily_returns = base_returns - mean_rf + daily_rf
             else:
                 # Standard GARCH with constant mean
                 mu = params[ticker]['mean_return']
@@ -675,12 +735,31 @@ def generate_monte_carlo_df(
     if inject_crash_event and config.crash_config is not None:
         crash_seed = seed + 999999 if seed else None
         for ticker in tickers_to_generate:
-            data[ticker] = inject_crash(
+            data[ticker], crash_start, crash_end = inject_crash(
                 data[ticker],
                 config.crash_config,
                 seed=crash_seed,
                 warmup_days=warmup_days
             )
+
+            # Recalculate GARCH variances to reflect crash impact on volatility
+            if config.use_garch and ticker in garch_params_all:
+                gp = garch_params_all[ticker]
+                if config.use_erp:
+                    # Use same mu as generation: ERP + mean_rf (returns include RF)
+                    mean_rf = np.mean(daily_rf)
+                    mu_daily = erp_values[ticker] / TRADING_DAYS_PER_YEAR + mean_rf
+                else:
+                    mu_daily = params[ticker]['mean_return'] / TRADING_DAYS_PER_YEAR
+
+                garch_vols[ticker] = recalculate_garch_variances(
+                    data[ticker],
+                    mu=mu_daily,
+                    omega=gp['omega'],
+                    alpha=gp['alpha'],
+                    beta=gp['beta'],
+                    initial_var=gp['long_run_var']
+                )
 
     # Derive leveraged ticker returns from base tickers
     # Leveraged return = leverage * base_return - (leverage - 1) * rf
@@ -694,19 +773,20 @@ def generate_monte_carlo_df(
     df.index.name = DATE_COL
 
     # Add volatility columns for base tickers
+    # Shift by 1 to avoid lookahead bias: vol on day i uses returns through day i-1
     for ticker in tickers_to_generate:
         if config.use_garch and ticker in garch_vols:
-            # Use GARCH conditional volatility
+            # Use GARCH conditional volatility (already forward-looking by nature)
             df[f"{ticker}_rvol_garch"] = garch_vols[ticker]
             # Also add rolling vol columns (some strategies may still want them)
             for label, window in VOLATILITY_WINDOWS.items():
                 col_name = f"{ticker}_rvol_{label}"
-                df[col_name] = df[ticker].rolling(window=window).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+                df[col_name] = df[ticker].rolling(window=window).std().shift(1) * np.sqrt(TRADING_DAYS_PER_YEAR)
         else:
             # Rolling realized volatility only
             for label, window in VOLATILITY_WINDOWS.items():
                 col_name = f"{ticker}_rvol_{label}"
-                df[col_name] = df[ticker].rolling(window=window).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+                df[col_name] = df[ticker].rolling(window=window).std().shift(1) * np.sqrt(TRADING_DAYS_PER_YEAR)
 
     # Add RF rate columns (daily returns for SGOV, percentages for rate columns)
     df[SGOV_TICKER] = rf_path / TRADING_DAYS_PER_YEAR
